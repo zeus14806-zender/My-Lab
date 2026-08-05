@@ -1,0 +1,6 @@
+{
+  "name": "MyLab - Laboratorio de Química Virtual",
+  "description": "Un laboratorio de química virtual interactivo con tabla periódica, simulación de reacciones químicas, cuestionarios, panel de administrador y perfil de estudiante.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
