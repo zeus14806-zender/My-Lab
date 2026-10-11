@@ -1,49 +1,101 @@
-import { Chain, Branch, Exercise } from './organicTypes';
+import { Chain, Branch, CarbonAtom, Exercise } from './organicTypes';
+
+// ============================================
+// UTILIDADES INTERNAS
+// ============================================
+
+let chainIdCounter = 0;
+function nextChainId(): string {
+  chainIdCounter += 1;
+  return `chain-${Date.now()}-${chainIdCounter}`;
+}
+
+const SUBSCRIPT_DIGITS: Record<string, string> = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
+};
+
+function toSubscript(value: number): string {
+  return String(value).split('').map(d => SUBSCRIPT_DIGITS[d] ?? d).join('');
+}
+
+function hydrogensFromConnections(connections: number): number {
+  return Math.max(0, 4 - connections);
+}
+
+function typeFromConnections(connections: number): CarbonAtom['type'] {
+  if (connections <= 1) return 'primario';
+  if (connections === 2) return 'secundario';
+  if (connections === 3) return 'terciario';
+  return 'cuaternario';
+}
+
+function substituentName(carbonCount: number): Branch['type'] {
+  if (carbonCount <= 1) return 'metil';
+  if (carbonCount === 2) return 'etil';
+  if (carbonCount === 3) return 'propil';
+  return 'butil';
+}
+
+function buildBranchedName(branches: Branch[], baseCarbonos: number): string {
+  const groups = new Map<number, number[]>();
+  branches.forEach(b => {
+    if (!groups.has(b.carbonCount)) groups.set(b.carbonCount, []);
+    groups.get(b.carbonCount)!.push(b.position);
+  });
+
+  const multiplicadores = ['', '', 'di', 'tri', 'tetra', 'penta'];
+  const ordered = [...groups.keys()].sort((a, b) =>
+    substituentName(a).localeCompare(substituentName(b))
+  );
+
+  const parts = ordered.map(cc => {
+    const positions = groups.get(cc)!.slice().sort((a, b) => a - b);
+    const mult = multiplicadores[positions.length] ?? '';
+    return `${positions.join(',')}-${mult}${substituentName(cc)}`;
+  });
+
+  const baseNames = ['met', 'et', 'prop', 'but', 'pent', 'hex', 'hept', 'oct', 'non', 'dec'];
+  const baseName = baseNames[baseCarbonos - 1] || `${baseCarbonos}`;
+  return `${parts.join('-')}${baseName}ano`;
+}
 
 // ============================================
 // FUNCIONES PARA GENERAR CADENAS
 // ============================================
 
 export function generarCadenaAlcano(cantidadCarbonos: number): Chain {
-  const carbons = [];
+  const carbons: CarbonAtom[] = [];
   for (let i = 0; i < cantidadCarbonos; i++) {
-    let type: 'primario' | 'secundario' | 'terciario' | 'cuaternario' = 'primario';
-    if (i === 0 || i === cantidadCarbonos - 1) {
-      type = 'primario';
-    } else if (cantidadCarbonos === 3 && i === 1) {
-      type = 'secundario';
-    } else if (i === 1 || i === cantidadCarbonos - 2) {
-      type = 'secundario';
-    } else {
-      type = 'secundario';
-    }
-    
+    const connections = cantidadCarbonos === 1
+      ? 0
+      : (i === 0 || i === cantidadCarbonos - 1 ? 1 : 2);
+
     carbons.push({
       id: `c${i}`,
-      type: type,
+      type: typeFromConnections(connections),
       position: i + 1,
       connections: [],
-      hydrogens: type === 'primario' ? 3 : type === 'secundario' ? 2 : type === 'terciario' ? 1 : 0,
-      x: 50 + i * 80,
-      y: 200
+      hydrogens: hydrogensFromConnections(connections),
+      x: 60 + i * 80,
+      y: 120
     });
   }
-  
+
   // Conectar carbonos
   for (let i = 0; i < carbons.length - 1; i++) {
     carbons[i].connections.push(carbons[i + 1].id);
     carbons[i + 1].connections.push(carbons[i].id);
   }
-  
+
   const names = ['Metano', 'Etano', 'Propano', 'Butano', 'Pentano', 'Hexano', 'Heptano', 'Octano', 'Nonano', 'Decano'];
-  const formulas = ['CH₄', 'C₂H₆', 'C₃H₈', 'C₄H₁₀', 'C₅H₁₂', 'C₆H₁₄', 'C₇H₁₆', 'C₈H₁₈', 'C₉H₂₀', 'C₁₀H₂₂'];
-  
+
   return {
-    id: `chain-${Date.now()}`,
+    id: nextChainId(),
     carbons: carbons,
     type: 'alcano',
     name: names[cantidadCarbonos - 1] || `${cantidadCarbonos} carbonos`,
-    formula: formulas[cantidadCarbonos - 1] || `C${cantidadCarbonos}H${cantidadCarbonos * 2 + 2}`,
+    formula: `C${toSubscript(cantidadCarbonos)}H${toSubscript(cantidadCarbonos * 2 + 2)}`,
     branches: [],
     doubleBonds: [],
     tripleBonds: [],
@@ -53,98 +105,97 @@ export function generarCadenaAlcano(cantidadCarbonos: number): Chain {
 
 export function generarCadenaAlqueno(cantidadCarbonos: number, posicionDoble: number): Chain {
   const chain = generarCadenaAlcano(cantidadCarbonos);
+  chain.id = nextChainId();
   chain.type = 'alqueno';
-  chain.doubleBonds = [posicionDoble];
-  
-  // Ajustar hidrógenos
+
+  const maxPos = Math.max(1, cantidadCarbonos - 1);
+  const pos = Math.min(Math.max(1, posicionDoble), maxPos);
+  chain.doubleBonds = [pos];
+
+  // Ajustar hidrógenos: cada carbono del doble enlace pierde un H
   chain.carbons.forEach((c, index) => {
-    if (index === posicionDoble - 1 || index === posicionDoble) {
-      c.hydrogens = c.type === 'primario' ? 2 : 1;
+    if (index === pos - 1 || index === pos) {
+      c.hydrogens = Math.max(0, c.hydrogens - 1);
     }
   });
-  
-  const names = ['Eteno', 'Propeno', 'Buteno', 'Penteno', 'Hexeno', 'Hepteno', 'Octeno'];
-  const posStr = posicionDoble === 1 ? '' : `${posicionDoble}-`;
-  chain.name = `${posStr}${names[cantidadCarbonos - 2] || `${cantidadCarbonos}-eno`}`;
-  chain.formula = `C${cantidadCarbonos}H${cantidadCarbonos * 2}`;
-  
+
+  const names = ['Eteno', 'Propeno', 'Buteno', 'Penteno', 'Hexeno', 'Hepteno', 'Octeno', 'Noneno', 'Deceno'];
+  const baseName = names[cantidadCarbonos - 2] || `${cantidadCarbonos}-eno`;
+  const locant = Math.min(pos, cantidadCarbonos - pos);
+  chain.name = cantidadCarbonos <= 3 ? baseName : `${locant}-${baseName}`;
+  chain.formula = `C${toSubscript(cantidadCarbonos)}H${toSubscript(cantidadCarbonos * 2)}`;
+
   return chain;
 }
 
 export function generarCadenaAlquino(cantidadCarbonos: number, posicionTriple: number): Chain {
   const chain = generarCadenaAlcano(cantidadCarbonos);
+  chain.id = nextChainId();
   chain.type = 'alquino';
-  chain.tripleBonds = [posicionTriple];
-  
+
+  const maxPos = Math.max(1, cantidadCarbonos - 1);
+  const pos = Math.min(Math.max(1, posicionTriple), maxPos);
+  chain.tripleBonds = [pos];
+
+  // Ajustar hidrógenos: cada carbono del triple enlace pierde dos H
   chain.carbons.forEach((c, index) => {
-    if (index === posicionTriple - 1 || index === posicionTriple) {
-      c.hydrogens = c.type === 'primario' ? 1 : 0;
+    if (index === pos - 1 || index === pos) {
+      c.hydrogens = Math.max(0, c.hydrogens - 2);
     }
   });
-  
-  const names = ['Etino', 'Propino', 'Butino', 'Pentino', 'Hexino', 'Heptino', 'Octino'];
-  const posStr = posicionTriple === 1 ? '' : `${posicionTriple}-`;
-  chain.name = `${posStr}${names[cantidadCarbonos - 2] || `${cantidadCarbonos}-ino`}`;
-  chain.formula = `C${cantidadCarbonos}H${cantidadCarbonos * 2 - 2}`;
-  
+
+  const names = ['Etino', 'Propino', 'Butino', 'Pentino', 'Hexino', 'Heptino', 'Octino', 'Nonino', 'Decino'];
+  const baseName = names[cantidadCarbonos - 2] || `${cantidadCarbonos}-ino`;
+  const locant = Math.min(pos, cantidadCarbonos - pos);
+  chain.name = cantidadCarbonos <= 3 ? baseName : `${locant}-${baseName}`;
+  chain.formula = `C${toSubscript(cantidadCarbonos)}H${toSubscript(cantidadCarbonos * 2 - 2)}`;
+
   return chain;
 }
 
-export function generarCadenaRamificada(carbonosBase: number, ramificaciones: { posicion: number, carbonos: number }[]): Chain {
+export function generarCadenaRamificada(
+  carbonosBase: number,
+  ramificaciones: { posicion: number; carbonos: number }[]
+): Chain {
   const chain = generarCadenaAlcano(carbonosBase);
-  
+  chain.id = nextChainId();
+
+  const branches: Branch[] = [];
+  const branchCountByIndex = new Array(carbonosBase).fill(0);
+
   ramificaciones.forEach(ram => {
-    chain.branches.push({
-      position: ram.posicion,
-      carbonCount: ram.carbonos,
-      name: ram.carbonos === 1 ? 'metil' : ram.carbonos === 2 ? 'etil' : 'propil',
-      type: ram.carbonos === 1 ? 'metil' : ram.carbonos === 2 ? 'etil' : 'propil'
+    if (carbonosBase < 3) return;
+    const pos = Math.min(Math.max(2, ram.posicion), carbonosBase - 1);
+    const cc = Math.min(Math.max(1, ram.carbonos), 4);
+    branches.push({
+      position: pos,
+      carbonCount: cc,
+      name: substituentName(cc),
+      type: substituentName(cc)
     });
+    branchCountByIndex[pos - 1] += 1;
   });
-  
-  // Construir nombre
-  let name = '';
-  const branchNames: { [key: number]: string } = {
-    1: 'metil',
-    2: 'etil',
-    3: 'propil',
-    4: 'butil'
-  };
-  
-  const prefixCount: { [key: string]: number } = {};
-  chain.branches.forEach(b => {
-    const key = branchNames[b.carbonCount] || 'metil';
-    prefixCount[key] = (prefixCount[key] || 0) + 1;
+
+  chain.branches = branches;
+
+  // Recalcular tipo e hidrógenos de los carbonos de la cadena principal
+  chain.carbons.forEach((c, index) => {
+    const baseConn = carbonosBase === 1
+      ? 0
+      : (index === 0 || index === carbonosBase - 1 ? 1 : 2);
+    const connections = baseConn + branchCountByIndex[index];
+    c.type = typeFromConnections(connections);
+    c.hydrogens = hydrogensFromConnections(connections);
   });
-  
-  const prefixes: { [key: string]: string } = {
-    'metil': 'metil',
-    'etil': 'etil',
-    'propil': 'propil',
-    'butil': 'butil'
-  };
-  
-  const numPrefix: { [key: number]: string } = {
-    1: '',
-    2: 'di',
-    3: 'tri',
-    4: 'tetra'
-  };
-  
-  const orderedBranches = chain.branches.sort((a, b) => a.position - b.position);
-  const branchStr = orderedBranches.map(b => {
-    const count = chain.branches.filter(br => br.carbonCount === b.carbonCount && br.position === b.position).length;
-    const prefix = count > 1 ? numPrefix[count] : '';
-    const name = prefixes[branchNames[b.carbonCount] || 'metil'];
-    return `${b.position}-${prefix}${name}`;
-  }).join(',');
-  
-  const baseNames = ['met', 'et', 'prop', 'but', 'pent', 'hex', 'hept', 'oct', 'non', 'dec'];
-  const baseName = baseNames[carbonosBase - 1] || `${carbonosBase}`;
-  
-  name = `${branchStr}${branchStr ? '-' : ''}${baseName}ano`;
-  chain.name = name;
-  
+
+  const baseNames = ['Metano', 'Etano', 'Propano', 'Butano', 'Pentano', 'Hexano', 'Heptano', 'Octano', 'Nonano', 'Decano'];
+  chain.name = branches.length > 0
+    ? buildBranchedName(branches, carbonosBase)
+    : (baseNames[carbonosBase - 1] || `${carbonosBase} carbonos`);
+
+  const totalCarbonos = carbonosBase + branches.reduce((sum, b) => sum + b.carbonCount, 0);
+  chain.formula = `C${toSubscript(totalCarbonos)}H${toSubscript(totalCarbonos * 2 + 2)}`;
+
   return chain;
 }
 

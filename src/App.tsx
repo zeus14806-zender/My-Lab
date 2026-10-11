@@ -27,7 +27,9 @@ import {
   FileSpreadsheet,
   ShieldAlert,
   AlertCircle,
-  PlusCircle
+  PlusCircle,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -38,7 +40,7 @@ import {
   Tooltip, 
   ResponsiveContainer 
 } from 'recharts';
-import { ELEMENTS, RECENT_ACTIVITIES, PENDING_REPORTS, COURSE_MODULES } from './data';
+import { RECENT_ACTIVITIES, PENDING_REPORTS, COURSE_MODULES } from './data';
 import { ElementData, ReactionResult, ActivityItem, LabReport, CourseModule } from './types';
 import { ALL_118_ELEMENTS, PeriodicElement } from './all118Elements';
 import { balanceEquation, getMolarMass } from './balancer';
@@ -103,6 +105,24 @@ export default function App() {
   const [signupConfirmPassword, setSignupConfirmPassword] = useState<string>('');
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+
+  // Tema claro / oscuro (persistido en localStorage)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('mylab_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('mylab_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   
   // Elements & Periodic Table State
   const [selectedElement, setSelectedElement] = useState<any>(ALL_118_ELEMENTS[5]);
@@ -836,21 +856,42 @@ export default function App() {
     }
   };
 
+  const CATEGORY_LABEL_MAP: Record<string, string> = {
+    'No Metales': 'No Metal',
+    'Metales Alcalinos': 'Metales Alcalinos',
+    'Metales Alcalinotérreos': 'Metales Alcalinotérreos',
+    'Metales de Transición': 'Metales de Transición',
+    'Metales Post-Transición': 'Metales Post-Transición',
+    'Metaloides': 'Metaloides',
+    'Halógenos': 'Halógenos',
+    'Gases Nobles': 'Gases Nobles',
+    'Lantánidos': 'Lantánido',
+    'Actínidos': 'Actínido'
+  };
+
+  const CATEGORY_COLOR_MAP: Record<string, string> = {
+    'No Metal': '#9fa8da',
+    'Metales Alcalinos': '#ba1a1a',
+    'Metales Alcalinotérreos': '#c2185b',
+    'Metales de Transición': '#461599',
+    'Metales Post-Transición': '#00695c',
+    'Metaloides': '#fdd34d',
+    'Halógenos': '#735c00',
+    'Gases Nobles': '#760038',
+    'Lantánido': '#283593',
+    'Actínido': '#37474f'
+  };
+
   // Filters for Periodic Table Categories
   const getFilteredElements = () => {
-    return ELEMENTS.filter(el => {
+    return ALL_118_ELEMENTS.filter(el => {
       const matchesSearch = searchQuery === '' || 
         el.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
         el.symbol.toLowerCase().includes(searchQuery.toLowerCase());
       
       if (elementFilter === 'Todos') return matchesSearch;
-      if (elementFilter === 'No Metales' && el.category === 'No Metal') return matchesSearch;
-      if (elementFilter === 'Metales Alcalinos' && el.category === 'Metales Alcalinos') return matchesSearch;
-      if (elementFilter === 'Gases Nobles' && el.category === 'Gases Nobles') return matchesSearch;
-      if (elementFilter === 'Halógenos' && el.category === 'Halógenos') return matchesSearch;
-      if (elementFilter === 'Metaloides' && el.category === 'Metaloides') return matchesSearch;
-      if (elementFilter === 'Metales de Transición' && el.category === 'Metales de Transición') return matchesSearch;
-      return false;
+      const targetCategory = CATEGORY_LABEL_MAP[elementFilter];
+      return matchesSearch && el.category === targetCategory;
     });
   };
 
@@ -970,6 +1011,15 @@ export default function App() {
       <div className="min-h-screen bg-[#f7fafd] flex items-center justify-center p-4 md:p-12 relative overflow-hidden font-sans text-[#181c1e] animated-bg">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#5e35b1]/10 rounded-full blur-3xl"></div>
         <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#ffdad6]/20 rounded-full blur-3xl"></div>
+
+        <button
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="absolute top-6 right-6 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-white/70 hover:bg-white/90 border border-[#cbc3d5]/40 text-[#494453] shadow-sm backdrop-blur transition-colors cursor-pointer"
+          title={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+          aria-label="Alternar modo oscuro"
+        >
+          {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
 
         <div className="relative w-full max-w-5xl grid md:grid-cols-12 gap-8 items-center bg-white/70 backdrop-blur-xl border border-white/50 shadow-2xl rounded-[2.5rem] p-6 md:p-10 z-10 animate-fade-in">
           <div className="md:col-span-6 hidden md:flex flex-col justify-between h-full space-y-8 pr-4">
@@ -1478,6 +1528,15 @@ export default function App() {
                 <Bell size={16} />
                 <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#ba1a1a]"></span>
               </button>
+
+              <button 
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                className="w-9 h-9 flex items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] transition-colors cursor-pointer"
+                title={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+                aria-label="Alternar modo oscuro"
+              >
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              </button>
             </div>
           </div>
         </header>
@@ -1661,7 +1720,7 @@ export default function App() {
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-fade-in">
               <div className="xl:col-span-8 flex flex-col space-y-6">
                 <div className="flex flex-wrap gap-2 bg-white/70 backdrop-blur border border-[#cbc3d5]/30 p-2 rounded-2xl">
-                  {['Todos', 'No Metales', 'Metales Alcalinos', 'Gases Nobles', 'Halógenos', 'Metaloides', 'Metales de Transición'].map((cat) => (
+                  {['Todos', 'No Metales', 'Metales Alcalinos', 'Metales Alcalinotérreos', 'Metales de Transición', 'Metales Post-Transición', 'Metaloides', 'Halógenos', 'Gases Nobles', 'Lantánidos', 'Actínidos'].map((cat) => (
                     <button 
                       key={cat}
                       onClick={() => setElementFilter(cat)}
@@ -1685,12 +1744,7 @@ export default function App() {
                   <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
                     {getFilteredElements().map((el) => {
                       const isSelected = selectedElement.symbol === el.symbol;
-                      let catColor = '#461599';
-                      if (el.category === 'No Metal') catColor = '#9fa8da';
-                      if (el.category === 'Metales Alcalinos') catColor = '#ba1a1a';
-                      if (el.category === 'Gases Nobles') catColor = '#760038';
-                      if (el.category === 'Halógenos') catColor = '#735c00';
-                      if (el.category === 'Metaloides') catColor = '#fdd34d';
+                      const catColor = CATEGORY_COLOR_MAP[el.category] || '#461599';
 
                       return (
                         <div 
@@ -1718,10 +1772,14 @@ export default function App() {
                   <div className="flex flex-wrap gap-4 text-[10px] font-bold text-[#7b7484] pt-4 border-t border-[#f1f4f7]" id="category-legend">
                     <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#9fa8da]"></span> No Metales</div>
                     <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#ba1a1a]"></span> Alcalinos</div>
-                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#760038]"></span> Gases Nobles</div>
-                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#735c00]"></span> Halógenos</div>
-                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#fdd34d]"></span> Metaloides</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#c2185b]"></span> Alcalinotérreos</div>
                     <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#461599]"></span> Transición</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#00695c]"></span> Post-Transición</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#fdd34d]"></span> Metaloides</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#735c00]"></span> Halógenos</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#760038]"></span> Gases Nobles</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#283593]"></span> Lantánidos</div>
+                    <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-[#37474f]"></span> Actínidos</div>
                   </div>
                 </div>
 
@@ -1805,6 +1863,10 @@ export default function App() {
                       <span className="text-[#181c1e]">{selectedElement.mass} u</span>
                     </div>
                     <div className="flex justify-between">
+                      <span className="text-[#7b7484]">Período / Grupo:</span>
+                      <span className="text-[#181c1e]">{selectedElement.period} / {selectedElement.group}</span>
+                    </div>
+                    <div className="flex justify-between">
                       <span className="text-[#7b7484]">Estado STP:</span>
                       <span className="text-[#181c1e]">{selectedElement.state}</span>
                     </div>
@@ -1813,8 +1875,20 @@ export default function App() {
                       <span className="text-[#181c1e]">{selectedElement.meltingPoint}</span>
                     </div>
                     <div className="flex justify-between">
+                      <span className="text-[#7b7484]">Punto de Ebullición:</span>
+                      <span className="text-[#181c1e]">{selectedElement.boilingPoint}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#7b7484]">Densidad:</span>
+                      <span className="text-[#181c1e]">{selectedElement.density}</span>
+                    </div>
+                    <div className="flex justify-between">
                       <span className="text-[#7b7484]">Configuración:</span>
                       <span className="font-mono text-[#461599]">{selectedElement.config}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#7b7484]">Electronegatividad:</span>
+                      <span className="text-[#181c1e]">{selectedElement.electronegativity}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#7b7484]">Descubridor:</span>

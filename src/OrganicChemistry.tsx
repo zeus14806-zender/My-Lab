@@ -1,18 +1,13 @@
 import { useState, useEffect } from 'react';
 import { 
-  Beaker, 
   ChevronRight, 
   CheckCircle, 
   XCircle, 
-  HelpCircle,
   RefreshCw,
   Award,
-  Clock,
-  Lightbulb,
-  ArrowLeft,
-  ArrowRight
+  Lightbulb
 } from 'lucide-react';
-import { Chain, CarbonAtom, Exercise } from './organicTypes';
+import { Chain, Exercise } from './organicTypes';
 import { 
   EJERCICIOS, 
   generarCadenaAlcano,
@@ -27,6 +22,146 @@ import {
 
 interface OrganicChemistryProps {
   onToast?: (message: string) => void;
+}
+
+const TYPE_COLORS: Record<string, string> = {
+  primario: '#3b82f6',
+  secundario: '#8b5cf6',
+  terciario: '#f59e0b',
+  cuaternario: '#ef4444'
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  primario: '1°',
+  secundario: '2°',
+  terciario: '3°',
+  cuaternario: '4°'
+};
+
+interface ChainDiagramProps {
+  chain: Chain;
+  compact?: boolean;
+}
+
+function ChainDiagram({ chain, compact = false }: ChainDiagramProps) {
+  const carbons = chain.carbons;
+  const n = carbons.length;
+  const spacing = compact ? 74 : 88;
+  const padX = compact ? 46 : 58;
+  const W = Math.max(padX * 2 + (n - 1) * spacing, compact ? 320 : 460);
+  const H = compact ? 200 : 270;
+  const centerY = compact ? 74 : 88;
+  const nodeR = compact ? 17 : 21;
+  const branchR = compact ? 13 : 16;
+
+  const points = carbons.map((_, i) => ({ x: padX + i * spacing, y: centerY }));
+
+  const bondColor = (index: number) =>
+    chain.doubleBonds.includes(index + 1) ? '#f59e0b'
+    : chain.tripleBonds.includes(index + 1) ? '#ef4444'
+    : '#7c5cff';
+
+  const bondOrder = (index: number) =>
+    chain.doubleBonds.includes(index + 1) ? 2
+    : chain.tripleBonds.includes(index + 1) ? 3
+    : 1;
+
+  const renderBond = (
+    x1: number, y1: number, x2: number, y2: number,
+    order: number, color: string, key: string
+  ) => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ox = -dy / len;
+    const oy = dx / len;
+    const offsets = order === 3 ? [-5, 0, 5] : order === 2 ? [-3.5, 3.5] : [0];
+    const width = compact ? 3 : 3.4;
+    return (
+      <g key={key}>
+        {offsets.map((o, i) => (
+          <line
+            key={i}
+            x1={x1 + ox * o}
+            y1={y1 + oy * o}
+            x2={x2 + ox * o}
+            y2={y2 + oy * o}
+            stroke={color}
+            strokeWidth={width}
+            strokeLinecap="round"
+          />
+        ))}
+      </g>
+    );
+  };
+
+  const seenByIndex: Record<number, number> = {};
+
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+      {/* Enlaces de la cadena principal */}
+      {points.map((p, i) =>
+        i < n - 1
+          ? renderBond(p.x, p.y, points[i + 1].x, points[i + 1].y, bondOrder(i), bondColor(i), `bond-${i}`)
+          : null
+      )}
+
+      {/* Ramificaciones */}
+      {chain.branches.map((b, bi) => {
+        const idx = b.position - 1;
+        const base = points[idx];
+        if (!base) return null;
+        const seen = seenByIndex[idx] ?? 0;
+        seenByIndex[idx] = seen + 1;
+        const lateral = seen === 0
+          ? 0
+          : (seen % 2 === 0 ? -1 : 1) * Math.ceil(seen / 2) * (compact ? 30 : 36);
+
+        const branchPoints = Array.from({ length: b.carbonCount }, (_, k) => ({
+          x: base.x + lateral + (k % 2 === 1 ? (compact ? 16 : 20) : 0),
+          y: base.y + (compact ? 58 : 72) + k * (compact ? 34 : 42)
+        }));
+
+        return (
+          <g key={`branch-${bi}`}>
+            {renderBond(base.x, base.y + nodeR, branchPoints[0].x, branchPoints[0].y - branchR, 1, '#7c5cff', `bb-${bi}`)}
+            {branchPoints.map((bp, k) =>
+              k < branchPoints.length - 1
+                ? renderBond(bp.x, bp.y, branchPoints[k + 1].x, branchPoints[k + 1].y, 1, '#7c5cff', `bc-${bi}-${k}`)
+                : null
+            )}
+            {branchPoints.map((bp, k) => (
+              <g key={`bnode-${bi}-${k}`}>
+                <circle cx={bp.x} cy={bp.y} r={branchR} className="chain-atom" stroke="#7c5cff" strokeWidth="1.8" />
+                <text x={bp.x} y={bp.y + 4} textAnchor="middle" fontSize={compact ? 10 : 11} fontWeight="bold" className="chain-atom-text">C</text>
+              </g>
+            ))}
+          </g>
+        );
+      })}
+
+      {/* Átomos de la cadena principal */}
+      {carbons.map((c, i) => {
+        const p = points[i];
+        const color = TYPE_COLORS[c.type] ?? '#3b82f6';
+        const label = TYPE_LABELS[c.type] ?? '1°';
+        return (
+          <g key={c.id}>
+            <circle cx={p.x} cy={p.y} r={nodeR + 3} fill={color} opacity="0.15" />
+            <circle cx={p.x} cy={p.y} r={nodeR} className="chain-atom" stroke={color} strokeWidth="2" />
+            <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={compact ? 11 : 12} fontWeight="bold" className="chain-atom-text">C</text>
+            <text x={p.x} y={p.y - nodeR - 6} textAnchor="middle" fontSize="9" className="chain-atom-meta">{c.position}</text>
+            {!compact && (
+              <text x={p.x} y={p.y + nodeR + 12} textAnchor="middle" fontSize="9" className="chain-atom-meta">{label}</text>
+            )}
+            {!compact && c.hydrogens > 0 && (
+              <text x={p.x + nodeR + 8} y={p.y + 4} fontSize="9" className="chain-atom-meta">H{c.hydrogens}</text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
 }
 
 export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
@@ -47,10 +182,6 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
   const [totalAttempts, setTotalAttempts] = useState<number>(0);
   const [showHint, setShowHint] = useState<boolean>(false);
   const [exercisesCompleted, setExercisesCompleted] = useState<Set<string>>(new Set());
-  
-  // Estado del Constructor de Cadenas
-  const [chainHistory, setChainHistory] = useState<Chain[]>([]);
-  const [customName, setCustomName] = useState<string>('');
 
   // ============================================
   // FUNCIONES DEL CONSTRUCTOR
@@ -84,8 +215,6 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
         chain = generarCadenaAlcano(carbonCount);
     }
     setCurrentChain(chain);
-    setChainHistory(prev => [...prev, chain]);
-    setCustomName('');
     setShowFormula(false);
     if (onToast) onToast(`✅ Cadena generada: ${chain.name}`);
   };
@@ -218,132 +347,7 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
 
         {/* Visualización Gráfica de la Cadena */}
         <div className="relative w-full h-64 bg-[#f8fafc] rounded-xl border border-[#cbc3d5]/20 overflow-hidden">
-          <svg width="100%" height="100%" viewBox="0 0 800 250">
-            {/* Dibujar enlaces */}
-            {currentChain.carbons.map((c, index) => {
-              if (index < currentChain.carbons.length - 1) {
-                const next = currentChain.carbons[index + 1];
-                const isDouble = currentChain.doubleBonds.includes(index + 1);
-                const isTriple = currentChain.tripleBonds.includes(index + 1);
-                
-                return (
-                  <g key={`bond-${index}`}>
-                    <line
-                      x1={c.x}
-                      y1={c.y}
-                      x2={next.x}
-                      y2={next.y}
-                      stroke={isDouble ? '#eab308' : isTriple ? '#ef4444' : '#3b82f6'}
-                      strokeWidth={isDouble ? 4 : isTriple ? 4 : 3}
-                      strokeDasharray={isDouble ? '8,4' : isTriple ? '4,4' : 'none'}
-                    />
-                    {isDouble && (
-                      <line
-                        x1={c.x}
-                        y1={c.y - 8}
-                        x2={next.x}
-                        y2={next.y - 8}
-                        stroke="#eab308"
-                        strokeWidth={3}
-                        strokeDasharray="8,4"
-                      />
-                    )}
-                    {isTriple && (
-                      <>
-                        <line
-                          x1={c.x}
-                          y1={c.y - 8}
-                          x2={next.x}
-                          y2={next.y - 8}
-                          stroke="#ef4444"
-                          strokeWidth={3}
-                          strokeDasharray="4,4"
-                        />
-                        <line
-                          x1={c.x}
-                          y1={c.y + 8}
-                          x2={next.x}
-                          y2={next.y + 8}
-                          stroke="#ef4444"
-                          strokeWidth={3}
-                          strokeDasharray="4,4"
-                        />
-                      </>
-                    )}
-                  </g>
-                );
-              }
-              return null;
-            })}
-
-            {/* Dibujar átomos de carbono */}
-            {currentChain.carbons.map((c) => {
-              const color = c.type === 'primario' ? '#3b82f6' : 
-                           c.type === 'secundario' ? '#8b5cf6' :
-                           c.type === 'terciario' ? '#f59e0b' : '#ef4444';
-              const label = c.type === 'primario' ? '1°' :
-                           c.type === 'secundario' ? '2°' :
-                           c.type === 'terciario' ? '3°' : '4°';
-              
-              return (
-                <g key={c.id}>
-                  <circle
-                    cx={c.x}
-                    cy={c.y}
-                    r={25}
-                    fill={color}
-                    opacity="0.15"
-                  />
-                  <circle
-                    cx={c.x}
-                    cy={c.y}
-                    r={22}
-                    fill="white"
-                    stroke={color}
-                    strokeWidth="2"
-                  />
-                  <text
-                    x={c.x}
-                    y={c.y - 4}
-                    textAnchor="middle"
-                    fontSize="12"
-                    fontWeight="bold"
-                    fill="#181c1e"
-                  >
-                    C
-                  </text>
-                  <text
-                    x={c.x}
-                    y={c.y + 14}
-                    textAnchor="middle"
-                    fontSize="8"
-                    fill="#7b7484"
-                  >
-                    {label}
-                  </text>
-                  <text
-                    x={c.x}
-                    y={c.y - 28}
-                    textAnchor="middle"
-                    fontSize="9"
-                    fill="#7b7484"
-                  >
-                    {c.position}
-                  </text>
-                  {c.hydrogens > 0 && (
-                    <text
-                      x={c.x + 30}
-                      y={c.y + 4}
-                      fontSize="9"
-                      fill="#7b7484"
-                    >
-                      H{c.hydrogens}
-                    </text>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
+          <ChainDiagram chain={currentChain} />
         </div>
 
         {/* Información de la Cadena */}
@@ -475,95 +479,7 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
 
             {/* Visualización de la cadena */}
             <div className="relative w-full h-48 bg-[#f8fafc] rounded-xl border border-[#cbc3d5]/20 overflow-hidden mb-4">
-              <svg width="100%" height="100%" viewBox="0 0 800 180">
-                {currentExercise.chain.carbons.map((c, index) => {
-                  if (index < currentExercise.chain.carbons.length - 1) {
-                    const next = currentExercise.chain.carbons[index + 1];
-                    const isDouble = currentExercise.chain.doubleBonds.includes(index + 1);
-                    const isTriple = currentExercise.chain.tripleBonds.includes(index + 1);
-                    
-                    return (
-                      <g key={`bond-${index}`}>
-                        <line
-                          x1={c.x}
-                          y1={c.y}
-                          x2={next.x}
-                          y2={next.y}
-                          stroke={isDouble ? '#eab308' : isTriple ? '#ef4444' : '#3b82f6'}
-                          strokeWidth={isDouble ? 4 : isTriple ? 4 : 3}
-                          strokeDasharray={isDouble ? '8,4' : isTriple ? '4,4' : 'none'}
-                        />
-                        {isDouble && (
-                          <line
-                            x1={c.x}
-                            y1={c.y - 8}
-                            x2={next.x}
-                            y2={next.y - 8}
-                            stroke="#eab308"
-                            strokeWidth={3}
-                            strokeDasharray="8,4"
-                          />
-                        )}
-                        {isTriple && (
-                          <>
-                            <line
-                              x1={c.x}
-                              y1={c.y - 8}
-                              x2={next.x}
-                              y2={next.y - 8}
-                              stroke="#ef4444"
-                              strokeWidth={3}
-                              strokeDasharray="4,4"
-                            />
-                            <line
-                              x1={c.x}
-                              y1={c.y + 8}
-                              x2={next.x}
-                              y2={next.y + 8}
-                              stroke="#ef4444"
-                              strokeWidth={3}
-                              strokeDasharray="4,4"
-                            />
-                          </>
-                        )}
-                      </g>
-                    );
-                  }
-                  return null;
-                })}
-
-                {currentExercise.chain.carbons.map((c) => (
-                  <g key={c.id}>
-                    <circle
-                      cx={c.x}
-                      cy={c.y}
-                      r={20}
-                      fill="white"
-                      stroke="#461599"
-                      strokeWidth="2"
-                    />
-                    <text
-                      x={c.x}
-                      y={c.y + 4}
-                      textAnchor="middle"
-                      fontSize="12"
-                      fontWeight="bold"
-                      fill="#181c1e"
-                    >
-                      C
-                    </text>
-                    <text
-                      x={c.x}
-                      y={c.y - 24}
-                      textAnchor="middle"
-                      fontSize="9"
-                      fill="#7b7484"
-                    >
-                      {c.position}
-                    </text>
-                  </g>
-                ))}
-              </svg>
+              <ChainDiagram chain={currentExercise.chain} compact />
             </div>
 
             {/* Información de la cadena */}
