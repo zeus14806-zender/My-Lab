@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { notifyWrite } from './backup/hooks.js';
 
 // Asegurar que el directorio data existe
 const dataDir = path.join(process.cwd(), 'data');
@@ -8,7 +9,8 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'mylab.db');
+// La DB principal puede sobreescribirse por variable de entorno (útil para pruebas)
+const dbPath = process.env.PRIMARY_DB_PATH || path.join(dataDir, 'mylab.db');
 
 // Crear y conectar a la base de datos
 const db = new sqlite3.Database(dbPath);
@@ -91,7 +93,11 @@ export function runQuery(sql: string, params: any[] = []): Promise<{ lastID: num
       if (err) {
         reject(err);
       } else {
-        resolve({ lastID: this.lastID, changes: this.changes });
+        const result = { lastID: this.lastID, changes: this.changes };
+        // Notifica a la capa de respaldo para replicar la escritura en tiempo real.
+        // Es puramente informativo: un fallo en el respaldo nunca afecta a la app.
+        notifyWrite({ sql, params, lastID: this.lastID, changes: this.changes });
+        resolve(result);
       }
     });
   });

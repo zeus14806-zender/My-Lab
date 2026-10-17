@@ -5,6 +5,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { db, runQuery, getQuery, getOneQuery, User, Activity, LabReport, CourseModule, Simulation, QuizResult } from "./db.js";
 import { runMigrations } from "./migrations.js";
+import { startBackupSystem, BackupSystem } from "./backup/index.js";
 
 dotenv.config();
 
@@ -12,6 +13,8 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+let backupSystem: BackupSystem | null = null;
 
 // Inicializar GoogleGenAI
 let ai: GoogleGenAI | null = null;
@@ -492,6 +495,22 @@ El tono debe ser directo para el estudiante, motivador, científico e instructiv
   }
 });
 
+// ==================== ESTADO DEL RESPALDO ====================
+
+app.get("/api/system/backup-status", (req, res) => {
+  if (!backupSystem) {
+    return res.json({ enabled: false, state: "DISABLED" });
+  }
+  res.json({
+    enabled: backupSystem.config.enabled,
+    state: backupSystem.monitor.state,
+    health_check_interval_ms: backupSystem.config.healthCheckIntervalMs,
+    restore_wait_ms: backupSystem.config.restoreWaitMs,
+    sync_interval_ms: backupSystem.config.syncIntervalMs,
+    backup_file: path.basename(backupSystem.config.backupPath)
+  });
+});
+
 // ==================== INICIO DEL SERVIDOR ====================
 
 async function start() {
@@ -502,6 +521,23 @@ async function start() {
     console.error('❌ Error al inicializar la base de datos:', error);
     process.exit(1);
   }
+
+  try {
+    backupSystem = await startBackupSystem();
+  } catch (error) {
+    console.error('⚠️  No se pudo iniciar el sistema de respaldo:', error);
+  }
+  const shutdown = async (signal: string) => {
+    console.log(`\n🛑 Señal ${signal} recibida. Cerrando sistema de respaldo...`);
+    try {
+      if (backupSystem) await backupSystem.stop();
+    } catch (error) {
+      console.error('Error al detener el sistema de respaldo:', error);
+    }
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
