@@ -342,7 +342,7 @@ export const COURSE_MODULES: CourseModule[] = [
   { 
     id: 'mod3', 
     title: 'Química Orgánica: Hidrocarburos', 
-    year: '4º Año', 
+    year: '5º Año', 
     subject: 'Fundamentos', 
     status: 'En Progreso', 
     color: '#760038', 

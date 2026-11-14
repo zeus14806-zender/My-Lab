@@ -2,6 +2,7 @@ import sqlite3 from 'sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { notifyWrite } from './backup/hooks.js';
+import type { AcademicYear } from './permissions.js';
 
 // Asegurar que el directorio data existe
 const dataDir = path.join(process.cwd(), 'data');
@@ -22,6 +23,7 @@ export interface User {
   email: string;
   password: string;
   role: 'student' | 'admin';
+  academic_year?: AcademicYear | null;
   xp_points: number;
   level: number;
   created_at?: string;

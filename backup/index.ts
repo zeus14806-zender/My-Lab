@@ -3,7 +3,7 @@ import { getQuery } from '../db.js';
 import { BackupConfig, BackupOverrides, SyncedTable, USER_RELATED_TABLES, loadBackupConfig } from './config.js';
 import { BackupLogger, createBackupLogger } from './logger.js';
 import { TABLE_DDL, META_DDL } from './schema.js';
-import { closeDatabase, exec, get, openDatabase, run, withTimeout } from './sqlite.js';
+import { closeDatabase, exec, get, all, openDatabase, run, withTimeout } from './sqlite.js';
 import { BackupSyncEngine } from './syncEngine.js';
 import { HealthMonitor } from './healthMonitor.js';
 import { restorePrimaryFromBackup } from './restore.js';
@@ -26,6 +26,29 @@ async function ensureBackupSchema(backupDb: sqlite3.Database, logger: BackupLogg
   await exec(backupDb, ddl);
   await exec(backupDb, META_DDL);
   await exec(backupDb, 'PRAGMA journal_mode=WAL');
+
+  // `CREATE TABLE IF NOT EXISTS` no agrega columnas nuevas a tablas ya
+  // existentes. Para mantener el espejo alineado con la DB principal (p. ej.
+  // tras migraciones como users.academic_year), copiamos las columnas que
+  // falten leyendo el esquema real de la principal.
+  for (const table of USER_RELATED_TABLES) {
+    const primaryColumns = await getQuery<{ name: string; type: string | null }>(
+      `PRAGMA table_info("${table}")`
+    );
+    const backupColumns = await all<{ name: string }>(backupDb, `PRAGMA table_info("${table}")`);
+    const existing = new Set(backupColumns.map((c) => c.name));
+
+    for (const column of primaryColumns) {
+      if (!column.name || existing.has(column.name)) continue;
+      const type = column.type && column.type.trim() ? column.type : 'TEXT';
+      await exec(backupDb, `ALTER TABLE "${table}" ADD COLUMN "${column.name}" ${type}`);
+      logger.info(
+        'SYNC_ESQUEMA_COLUMNA',
+        `Columna ${table}.${column.name} agregada a la DB de respaldo`
+      );
+    }
+  }
+
   await run(
     backupDb,
     'INSERT INTO backup_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',

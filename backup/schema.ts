@@ -8,6 +8,7 @@ export const TABLE_DDL: Record<string, string> = {
       email TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       role TEXT DEFAULT 'student',
+      academic_year TEXT,
       xp_points INTEGER DEFAULT 0,
       level INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

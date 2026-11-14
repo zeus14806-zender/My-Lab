@@ -45,6 +45,24 @@ import { ElementData, ReactionResult, ActivityItem, LabReport, CourseModule } fr
 import { ALL_118_ELEMENTS, PeriodicElement } from './all118Elements';
 import { balanceEquation, getMolarMass } from './balancer';
 import OrganicChemistry from './OrganicChemistry';
+import {
+  ACADEMIC_YEARS,
+  academicYearLabel,
+  canAccessModule,
+  isAcademicYear,
+  moduleAccessDeniedMessage,
+  normalizeAcademicYear,
+} from '../permissions';
+import type { AcademicYear } from '../permissions';
+
+type AuthAlertType = 'error' | 'warning' | 'success';
+type AuthAlertField = 'name' | 'email' | 'password' | 'confirm' | 'year' | 'general';
+
+interface AuthAlert {
+  type: AuthAlertType;
+  message: string;
+  field?: AuthAlertField;
+}
 
 export default function App() {
   // Authentication Role State - MODIFICADO PARA ADMIN
@@ -96,6 +114,17 @@ export default function App() {
     }
     return 0;
   });
+  const [userYear, setUserYear] = useState<AcademicYear | null>(() => {
+    const active = localStorage.getItem('mylab_active_user');
+    if (active) {
+      try {
+        return normalizeAcademicYear(JSON.parse(active).academic_year);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
   const [loginMode, setLoginMode] = useState<'signin' | 'signup'>('signin');
   const [loginEmail, setLoginEmail] = useState<string>('alex.martinez@mylab.edu');
   const [loginPassword, setLoginPassword] = useState<string>('password123');
@@ -103,6 +132,9 @@ export default function App() {
   const [signupEmail, setSignupEmail] = useState<string>('');
   const [signupPassword, setSignupPassword] = useState<string>('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState<string>('');
+  const [signupYear, setSignupYear] = useState<AcademicYear | ''>('');
+  // Alerta en línea de la pantalla de acceso (el toast global no se dibuja aquí).
+  const [authAlert, setAuthAlert] = useState<AuthAlert | null>(null);
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
@@ -454,6 +486,30 @@ export default function App() {
       setToastMessage(null);
     }, 4000);
   };
+
+  // ============================================
+  // ALERTAS DE LA PANTALLA DE ACCESO
+  // ============================================
+  const showAuthAlert = (alert: AuthAlert) => setAuthAlert(alert);
+  const clearAuthAlert = () => setAuthAlert(null);
+
+  // Limpia la alerta cuando el usuario corrige el campo señalado.
+  const clearAlertFor = (field: AuthAlertField) => {
+    setAuthAlert((current) => (current?.field === field ? null : current));
+  };
+
+  const switchAuthMode = (mode: 'signin' | 'signup') => {
+    setLoginMode(mode);
+    clearAuthAlert();
+  };
+
+  // Estilo de los campos que la alerta marca como erróneos.
+  const authFieldClass = (field: AuthAlertField) =>
+    `w-full px-4 py-3 rounded-xl border bg-[#f1f4f7] outline-none text-sm font-semibold focus:bg-white transition-all text-[#181c1e] ${
+      authAlert?.field === field
+        ? 'border-red-400 ring-2 ring-red-100 focus:border-red-500 focus:ring-red-100'
+        : 'border-[#cbc3d5]/40 focus:border-[#461599]'
+    }`;
 
   const formattedTime = () => {
     const min = Math.floor(timeRemaining / 60);
@@ -896,8 +952,35 @@ export default function App() {
   };
 
   const handleCustomLogin = async () => {
-    if (!loginEmail || !loginPassword) {
-      showToast('Por favor completa todos los campos de acceso.');
+    clearAuthAlert();
+
+    const email = loginEmail.trim();
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!email) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Ingresa tu correo electrónico para continuar.',
+        field: 'email',
+      });
+      return;
+    }
+
+    if (!emailPattern.test(email)) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'El formato del correo electrónico no es válido.',
+        field: 'email',
+      });
+      return;
+    }
+
+    if (!loginPassword) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Ingresa tu contraseña para continuar.',
+        field: 'password',
+      });
       return;
     }
 
@@ -905,21 +988,47 @@ export default function App() {
       const response = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+        body: JSON.stringify({ email, password: loginPassword }),
       });
-      
-      const data = await response.json();
-      
-      if (data.error) {
-        showToast('Credenciales incorrectas. Intenta con alex.martinez@mylab.edu (clave: password123) o regístrate.');
+
+      const data = await response.json().catch(() => ({} as any));
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          showAuthAlert({
+            type: 'error',
+            message: data.error || 'Este correo electrónico no está registrado.',
+            field: 'email',
+          });
+        } else if (response.status === 401) {
+          showAuthAlert({
+            type: 'error',
+            message: data.error || 'Contraseña incorrecta. Verifica e intenta nuevamente.',
+            field: 'password',
+          });
+        } else if (response.status === 400) {
+          showAuthAlert({
+            type: 'warning',
+            message: data.error || 'Completa tu correo electrónico y contraseña.',
+            field: 'general',
+          });
+        } else {
+          showAuthAlert({
+            type: 'error',
+            message: data.error || 'No pudimos iniciar sesión. Intenta nuevamente.',
+            field: 'general',
+          });
+        }
         return;
       }
-      
+
+      clearAuthAlert();
       localStorage.setItem('mylab_active_user', JSON.stringify(data));
       setUserRole(data.role || 'student');
       setUserName(data.name);
       setUserEmail(data.email);
       setUserId(data.id);
+      setUserYear(normalizeAcademicYear(data.academic_year));
       setActiveTab('dashboard');
       
       setTimeout(() => {
@@ -934,26 +1043,93 @@ export default function App() {
       
       showToast(`¡Sesión iniciada con éxito! Bienvenido, ${data.name}.`);
     } catch (error) {
-      showToast('Error de conexión. Intenta nuevamente.');
+      showAuthAlert({
+        type: 'error',
+        message: 'No hay conexión con el servidor. Revisa tu red e intenta nuevamente.',
+        field: 'general',
+      });
     }
   };
 
   const handleCustomSignup = async () => {
-    // Validar campos obligatorios
-    if (!signupName || !signupEmail || !signupPassword || !signupConfirmPassword) {
-      showToast('⚠️ Por favor diligencia TODOS los campos del registro.');
+    clearAuthAlert();
+
+    const name = signupName.trim();
+    const email = signupEmail.trim();
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // Validar campos obligatorios, señalando el primero que falla.
+    if (!name) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Escribe tu nombre completo para crear la cuenta.',
+        field: 'name',
+      });
       return;
     }
 
-    // Validar que las contraseñas coincidan
-    if (signupPassword !== signupConfirmPassword) {
-      showToast('❌ Las contraseñas no coinciden. Verifica e intenta nuevamente.');
+    if (!email) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Ingresa tu correo electrónico para crear la cuenta.',
+        field: 'email',
+      });
       return;
     }
 
-    // Validar longitud mínima de contraseña
+    if (!emailPattern.test(email)) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'El formato del correo electrónico no es válido.',
+        field: 'email',
+      });
+      return;
+    }
+
+    // Validar año académico (obligatorio y excluyente)
+    if (!isAcademicYear(signupYear)) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Selecciona tu año académico: 4.º o 5.º.',
+        field: 'year',
+      });
+      return;
+    }
+
+    // Validar contraseña
+    if (!signupPassword) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Establece una contraseña para tu cuenta.',
+        field: 'password',
+      });
+      return;
+    }
+
     if (signupPassword.length < 6) {
-      showToast('❌ La contraseña debe tener al menos 6 caracteres.');
+      showAuthAlert({
+        type: 'error',
+        message: 'La contraseña debe tener al menos 6 caracteres.',
+        field: 'password',
+      });
+      return;
+    }
+
+    if (!signupConfirmPassword) {
+      showAuthAlert({
+        type: 'warning',
+        message: 'Confirma tu contraseña para continuar.',
+        field: 'confirm',
+      });
+      return;
+    }
+
+    if (signupPassword !== signupConfirmPassword) {
+      showAuthAlert({
+        type: 'error',
+        message: 'Las contraseñas no coinciden. Verifica e intenta nuevamente.',
+        field: 'confirm',
+      });
       return;
     }
 
@@ -962,25 +1138,51 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: signupName,
-          email: signupEmail,
+          name,
+          email,
           password: signupPassword,
-          role: 'student'
+          role: 'student',
+          academic_year: signupYear,
         }),
       });
       
-      const data = await response.json();
-      
-      if (data.error) {
-        showToast(`❌ ${data.error}`);
+      const data = await response.json().catch(() => ({} as any));
+
+      if (!response.ok || data.error) {
+        if (response.status === 409) {
+          showAuthAlert({
+            type: 'error',
+            message:
+              data.error ||
+              'Este correo electrónico ya está registrado. Inicia sesión o usa otro correo.',
+            field: 'email',
+          });
+        } else if (response.status === 400) {
+          // El backend valida año y contraseña; señalamos el campo correspondiente.
+          const message = data.error || 'Revisa los datos del registro.';
+          const field: AuthAlertField = message.toLowerCase().includes('año')
+            ? 'year'
+            : message.toLowerCase().includes('contraseña')
+              ? 'password'
+              : 'general';
+          showAuthAlert({ type: 'warning', message, field });
+        } else {
+          showAuthAlert({
+            type: 'error',
+            message: data.error || 'No pudimos crear tu cuenta. Intenta nuevamente.',
+            field: 'general',
+          });
+        }
         return;
       }
-      
+
+      clearAuthAlert();
       localStorage.setItem('mylab_active_user', JSON.stringify(data));
       setUserRole('student');
       setUserName(data.name);
       setUserEmail(data.email);
       setUserId(data.id);
+      setUserYear(normalizeAcademicYear(data.academic_year) ?? (isAcademicYear(signupYear) ? signupYear : null));
       setLoginMode('signin');
       setActiveTab('dashboard');
       
@@ -989,10 +1191,15 @@ export default function App() {
       setSignupEmail('');
       setSignupPassword('');
       setSignupConfirmPassword('');
+      setSignupYear('');
       
       showToast(`✅ ¡Cuenta creada con éxito! Bienvenido, ${data.name}.`);
     } catch (error) {
-      showToast('❌ Error de conexión. Intenta nuevamente.');
+      showAuthAlert({
+        type: 'error',
+        message: 'No hay conexión con el servidor. Revisa tu red e intenta nuevamente.',
+        field: 'general',
+      });
     }
   };
 
@@ -1002,7 +1209,39 @@ export default function App() {
     setUserName('');
     setUserEmail('');
     setUserId(0);
+    setUserYear(null);
     showToast('Has cerrado tu sesión de forma segura.');
+  };
+
+  // Acceso al módulo de Química Orgánica (restringido a 5.º año y admins).
+  const canAccessOrganic = canAccessModule('quimica_organica', {
+    role: userRole,
+    academicYear: userYear,
+  });
+
+  const openOrganicChemistry = async () => {
+    // Guarda de ruta en cliente: primera barrera y feedback inmediato.
+    if (!canAccessOrganic) {
+      showToast(moduleAccessDeniedMessage('quimica_organica'));
+      return;
+    }
+
+    // Verificación en servidor (defensa en profundidad). Si el backend no
+    // responde, se mantiene la política del cliente para no bloquear la UX.
+    try {
+      const response = await fetch('/api/modules/quimica_organica', {
+        headers: userId ? { 'x-user-id': String(userId) } : {},
+      });
+      if (response.status === 401 || response.status === 403) {
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || moduleAccessDeniedMessage('quimica_organica'));
+        return;
+      }
+    } catch {
+      // Sin conexión: la comprobación local ya autorizó el acceso.
+    }
+
+    setActiveTab('organica');
   };
 
   // Render Access / Login Screen
@@ -1079,6 +1318,33 @@ export default function App() {
                 </p>
               </div>
 
+              {authAlert && (
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-left animate-fade-in ${
+                    authAlert.type === 'error'
+                      ? 'bg-red-50 border-red-200 text-red-700'
+                      : authAlert.type === 'warning'
+                        ? 'bg-amber-50 border-amber-200 text-amber-800'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[20px] leading-none mt-0.5">
+                    {authAlert.type === 'error' ? 'error' : authAlert.type === 'warning' ? 'warning' : 'check_circle'}
+                  </span>
+                  <p className="flex-1 text-xs font-semibold leading-relaxed">{authAlert.message}</p>
+                  <button
+                    type="button"
+                    onClick={clearAuthAlert}
+                    aria-label="Cerrar alerta"
+                    className="shrink-0 opacity-60 hover:opacity-100 transition-opacity cursor-pointer bg-transparent border-none p-0"
+                  >
+                    <span className="material-symbols-outlined text-[18px] leading-none">close</span>
+                  </button>
+                </div>
+              )}
+
               {loginMode === 'signin' ? (
                 <div className="space-y-4 text-left">
                   <div className="space-y-1">
@@ -1086,9 +1352,12 @@ export default function App() {
                     <input 
                       type="email" 
                       value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
+                      onChange={(e) => {
+                        setLoginEmail(e.target.value);
+                        clearAlertFor('email');
+                      }}
                       placeholder="alex.martinez@mylab.edu"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('email')}
                     />
                   </div>
 
@@ -1097,9 +1366,15 @@ export default function App() {
                     <input 
                       type="password" 
                       value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
+                      onChange={(e) => {
+                        setLoginPassword(e.target.value);
+                        clearAlertFor('password');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleCustomLogin();
+                      }}
                       placeholder="••••••••"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('password')}
                     />
                   </div>
 
@@ -1114,7 +1389,7 @@ export default function App() {
                     <p className="text-xs text-[#7b7484] font-semibold">
                       ¿No tienes cuenta?{' '}
                       <button 
-                        onClick={() => setLoginMode('signup')}
+                        onClick={() => switchAuthMode('signup')}
                         className="text-[#461599] font-black hover:underline cursor-pointer bg-transparent border-none p-0 inline"
                       >
                         Créala ahora mismo
@@ -1129,9 +1404,12 @@ export default function App() {
                     <input 
                       type="text" 
                       value={signupName}
-                      onChange={(e) => setSignupName(e.target.value)}
+                      onChange={(e) => {
+                        setSignupName(e.target.value);
+                        clearAlertFor('name');
+                      }}
                       placeholder="Alex Martinez"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('name')}
                     />
                   </div>
 
@@ -1140,10 +1418,37 @@ export default function App() {
                     <input 
                       type="email" 
                       value={signupEmail}
-                      onChange={(e) => setSignupEmail(e.target.value)}
+                      onChange={(e) => {
+                        setSignupEmail(e.target.value);
+                        clearAlertFor('email');
+                      }}
                       placeholder="tu.nombre@mylab.edu"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('email')}
                     />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-[#494453]">Año Académico</label>
+                    <div className={`grid grid-cols-2 gap-2 rounded-xl ${authAlert?.field === 'year' ? 'ring-2 ring-red-200' : ''}`}>
+                      {ACADEMIC_YEARS.map((year) => (
+                        <button
+                          type="button"
+                          key={year}
+                          onClick={() => {
+                            setSignupYear(year);
+                            clearAlertFor('year');
+                          }}
+                          className={`px-4 py-3 rounded-xl border text-sm font-bold transition-all cursor-pointer ${
+                            signupYear === year
+                              ? 'bg-[#461599] text-white border-[#461599] shadow-md shadow-[#461599]/20'
+                              : 'bg-[#f1f4f7] text-[#494453] border-[#cbc3d5]/40 hover:border-[#461599]/40'
+                          }`}
+                        >
+                          {academicYearLabel(year)}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-[#7b7484] mt-1">Obligatorio. Química Orgánica se habilita en 5.º año.</p>
                   </div>
 
                   <div className="space-y-1">
@@ -1151,9 +1456,12 @@ export default function App() {
                     <input 
                       type="password" 
                       value={signupPassword}
-                      onChange={(e) => setSignupPassword(e.target.value)}
+                      onChange={(e) => {
+                        setSignupPassword(e.target.value);
+                        clearAlertFor('password');
+                      }}
                       placeholder="Mínimo 6 caracteres"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('password')}
                     />
                     <p className="text-[10px] text-[#7b7484] mt-1">🔒 La contraseña debe tener al menos 6 caracteres</p>
                   </div>
@@ -1163,9 +1471,15 @@ export default function App() {
                     <input 
                       type="password" 
                       value={signupConfirmPassword}
-                      onChange={(e) => setSignupConfirmPassword(e.target.value)}
+                      onChange={(e) => {
+                        setSignupConfirmPassword(e.target.value);
+                        clearAlertFor('confirm');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleCustomSignup();
+                      }}
                       placeholder="Vuelve a escribir tu contraseña"
-                      className="w-full px-4 py-3 rounded-xl border border-[#cbc3d5]/40 bg-[#f1f4f7] outline-none text-sm font-semibold focus:border-[#461599] focus:bg-white transition-all text-[#181c1e]"
+                      className={authFieldClass('confirm')}
                     />
                     {signupConfirmPassword && (
                       <div className={`text-[10px] font-bold mt-1 flex items-center gap-1 ${
@@ -1191,7 +1505,7 @@ export default function App() {
                     <p className="text-xs text-[#7b7484] font-semibold">
                       ¿Ya tienes cuenta activa?{' '}
                       <button 
-                        onClick={() => setLoginMode('signin')}
+                        onClick={() => switchAuthMode('signin')}
                         className="text-[#461599] font-black hover:underline cursor-pointer bg-transparent border-none p-0 inline"
                       >
                         Inicia Sesión
@@ -1360,18 +1674,20 @@ export default function App() {
               <span>Reactor Químico</span>
             </button>
 
-            {/* 🆕 QUÍMICA ORGÁNICA - NUEVO BOTÓN */}
-            <button 
-              onClick={() => setActiveTab('organica')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'organica' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">science</span>
-              <span>Química Orgánica</span>
-            </button>
+            {/* 🆕 QUÍMICA ORGÁNICA - visible solo si el año académico lo permite */}
+            {canAccessOrganic && (
+              <button 
+                onClick={openOrganicChemistry}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
+                  activeTab === 'organica' 
+                    ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
+                    : 'text-[#494453] hover:bg-[#f1f4f7]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-lg">science</span>
+                <span>Química Orgánica</span>
+              </button>
+            )}
 
             <button 
               onClick={() => setActiveTab('quizzes')}
@@ -1460,10 +1776,12 @@ export default function App() {
           <span className="material-symbols-outlined text-lg">science</span>
           <span className="text-[9px] font-bold">Reactor</span>
         </button>
-        <button onClick={() => setActiveTab('organica')} className={`flex flex-col items-center flex-1 ${activeTab === 'organica' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
-          <span className="material-symbols-outlined text-lg">science</span>
-          <span className="text-[9px] font-bold">Orgánica</span>
-        </button>
+        {canAccessOrganic && (
+          <button onClick={openOrganicChemistry} className={`flex flex-col items-center flex-1 ${activeTab === 'organica' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
+            <span className="material-symbols-outlined text-lg">science</span>
+            <span className="text-[9px] font-bold">Orgánica</span>
+          </button>
+        )}
         <button onClick={() => setActiveTab('quizzes')} className={`flex flex-col items-center flex-1 ${activeTab === 'quizzes' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
           <span className="material-symbols-outlined text-lg">quiz</span>
           <span className="text-[9px] font-bold">Cuestionario</span>
@@ -1671,6 +1989,7 @@ export default function App() {
                           onClick={() => {
                             if (mod.id === 'mod1') setActiveTab('periodic');
                             else if (mod.id === 'mod2') setActiveTab('quizzes');
+                            else if (mod.id === 'mod3') openOrganicChemistry();
                             else {
                               setActiveTab('simulator');
                               handleSimulateCustomReaction();
@@ -2323,9 +2642,25 @@ export default function App() {
             </div>
           )}
 
-          {/* 🆕 TAB: QUÍMICA ORGÁNICA */}
+          {/* 🆕 TAB: QUÍMICA ORGÁNICA (restringida por año académico) */}
           {activeTab === 'organica' && (
-            <OrganicChemistry onToast={showToast} />
+            canAccessOrganic ? (
+              <OrganicChemistry onToast={showToast} />
+            ) : (
+              <div className="bg-white border border-[#cbc3d5]/35 rounded-[2rem] p-8 max-w-xl mx-auto text-center space-y-4 shadow-sm animate-fade-in">
+                <div className="w-16 h-16 bg-[#ffdad6] text-[#ba1a1a] rounded-2xl flex items-center justify-center mx-auto">
+                  <span className="material-symbols-outlined text-3xl">lock</span>
+                </div>
+                <h2 className="text-xl font-extrabold text-[#181c1e]">Química Orgánica</h2>
+                <p className="text-sm text-[#494453] font-medium">{moduleAccessDeniedMessage('quimica_organica')}</p>
+                <button
+                  onClick={() => setActiveTab('dashboard')}
+                  className="px-5 py-2.5 bg-[#461599] hover:bg-[#5e35b1] text-white text-xs font-bold rounded-xl shadow-lg shadow-[#461599]/20 transition-all"
+                >
+                  Volver al Dashboard
+                </button>
+              </div>
+            )
           )}
 
           {/* TAB: QUIZZES */}
@@ -2674,6 +3009,11 @@ export default function App() {
                   </div>
 
                   <div className="flex flex-wrap gap-2 justify-center md:justify-start">
+                    {userRole === 'student' && (
+                      <span className="bg-[#eaddff] text-[#24005b] text-[10px] font-bold px-3 py-1 rounded-xl">
+                        🎓 {academicYearLabel(userYear)}
+                      </span>
+                    )}
                     <span className="bg-[#ffe087] text-[#725b00] text-[10px] font-bold px-3 py-1 rounded-xl">
                       Puntos de Honor: 2,450 XP
                     </span>
@@ -2807,6 +3147,7 @@ export default function App() {
                         <th className="pb-2">Usuario</th>
                         <th className="pb-2">Email</th>
                         <th className="pb-2">Rol</th>
+                        <th className="pb-2">Año</th>
                         <th className="pb-2">XP</th>
                         <th className="pb-2">Nivel</th>
                         <th className="pb-2">Acciones</th>
@@ -2825,6 +3166,9 @@ export default function App() {
                             }`}>
                               {user.role === 'admin' ? '👑 Admin' : '👨‍🎓 Estudiante'}
                             </span>
+                          </td>
+                          <td className="py-3 text-xs font-bold text-[#494453]">
+                            {user.role === 'student' ? academicYearLabel(normalizeAcademicYear(user.academic_year)) : '—'}
                           </td>
                           <td className="py-3 text-xs font-bold">{user.xp_points || 0}</td>
                           <td className="py-3 text-xs font-bold">{user.level || 1}</td>

@@ -17,6 +17,19 @@ function tableExists(tableName: string): Promise<boolean> {
   });
 }
 
+// Función para obtener las columnas de una tabla
+function getTableColumns(tableName: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA table_info("${tableName}")`, (err, rows: any[]) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve((rows || []).map((row) => String(row.name)));
+      }
+    });
+  });
+}
+
 // Función para ejecutar migraciones
 export async function runMigrations() {
   console.log('🔄 Ejecutando migraciones...');
@@ -31,6 +44,7 @@ export async function runMigrations() {
           email TEXT UNIQUE NOT NULL,
           password TEXT NOT NULL,
           role TEXT DEFAULT 'student',
+          academic_year TEXT,
           xp_points INTEGER DEFAULT 0,
           level INTEGER DEFAULT 1,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -38,6 +52,14 @@ export async function runMigrations() {
         )
       `);
       console.log('✅ Tabla users creada');
+    }
+
+    // Columna: academic_year (control de acceso por año académico)
+    // Se agrega de forma idempotente para bases de datos ya existentes.
+    const userColumns = await getTableColumns('users');
+    if (!userColumns.includes('academic_year')) {
+      await runQuery(`ALTER TABLE users ADD COLUMN academic_year TEXT`);
+      console.log('✅ Columna users.academic_year agregada');
     }
 
     // Tabla: activities
@@ -137,14 +159,14 @@ export async function runMigrations() {
 
     if (existingUsers.length === 0) {
       await runQuery(`
-        INSERT INTO users (name, email, password, role, xp_points, level)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, ['Alex Martinez', 'alex.martinez@mylab.edu', 'password123', 'student', 2450, 14]);
+        INSERT INTO users (name, email, password, role, xp_points, level, academic_year)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, ['Alex Martinez', 'alex.martinez@mylab.edu', 'password123', 'student', 2450, 14, '5']);
       
       await runQuery(`
-        INSERT INTO users (name, email, password, role, xp_points, level)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, ['Dra. Elena Vega', 'elena.vega@mylab.edu', 'admin123', 'admin', 0, 1]);
+        INSERT INTO users (name, email, password, role, xp_points, level, academic_year)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, ['Dra. Elena Vega', 'elena.vega@mylab.edu', 'admin123', 'admin', 0, 1, null]);
       
       console.log('✅ Usuarios por defecto creados');
     }
@@ -163,7 +185,7 @@ export async function runMigrations() {
         VALUES 
           ('Tabla Periódica Interactiva', '4º Año', 'Física y Química', 'Iniciado', '#461599', 'bg-primary/10', 'grid_view'),
           ('Equilibrio Químico y pH', '5º Año', 'Química Avanzada', 'Listo', '#735c00', 'bg-[#ffe087]/30', 'thermostat'),
-          ('Química Orgánica: Hidrocarburos', '4º Año', 'Fundamentos', 'En Progreso', '#760038', 'bg-[#ffd9e1]/40', 'bubble_chart')
+          ('Química Orgánica: Hidrocarburos', '5º Año', 'Fundamentos', 'En Progreso', '#760038', 'bg-[#ffd9e1]/40', 'bubble_chart')
       `);
       console.log('✅ Módulos de curso creados');
     }

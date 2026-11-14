@@ -6,6 +6,14 @@ import dotenv from "dotenv";
 import { db, runQuery, getQuery, getOneQuery, User, Activity, LabReport, CourseModule, Simulation, QuizResult } from "./db.js";
 import { runMigrations } from "./migrations.js";
 import { startBackupSystem, BackupSystem } from "./backup/index.js";
+import {
+  canAccessModule,
+  isAcademicYear,
+  normalizeAcademicYear,
+  moduleAccessDeniedMessage,
+  type PermissionSubject,
+  type RestrictedModuleKey,
+} from "./permissions.js";
 
 dotenv.config();
 
@@ -34,7 +42,7 @@ if (process.env.GEMINI_API_KEY) {
 // Obtener todos los usuarios
 app.get("/api/users", async (req, res) => {
   try {
-    const users = await getQuery<User>("SELECT id, name, email, role, xp_points, level, created_at FROM users");
+    const users = await getQuery<User>("SELECT id, name, email, role, academic_year, xp_points, level, created_at FROM users");
     res.json(users);
   } catch (error: any) {
     res.status(500).json({ error: "Error al obtener usuarios", detail: error.message });
@@ -45,7 +53,7 @@ app.get("/api/users", async (req, res) => {
 app.get("/api/users/:email", async (req, res) => {
   try {
     const user = await getOneQuery<User>(
-      "SELECT id, name, email, role, xp_points, level, created_at FROM users WHERE email = ?",
+      "SELECT id, name, email, role, academic_year, xp_points, level, created_at FROM users WHERE email = ?",
       [req.params.email]
     );
     if (!user) {
@@ -60,26 +68,45 @@ app.get("/api/users/:email", async (req, res) => {
 // Crear usuario - CON VALIDACIÓN DE CONTRASEÑA
 app.post("/api/users", async (req, res) => {
   try {
-    const { name, email, password, role = 'student' } = req.body;
+    const { role = 'student' } = req.body;
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const academicYear = normalizeAcademicYear(req.body.academic_year);
+
+    if (!name) {
+      return res.status(400).json({ error: "El nombre es obligatorio." });
+    }
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "Ingresa un correo electrónico válido." });
+    }
     
     // ✅ Validar que la contraseña tenga al menos 6 caracteres
     if (!password || password.length < 6) {
       return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
     }
+
+    // ✅ El año académico es obligatorio y válido para estudiantes
+    if (role === 'student' && !isAcademicYear(academicYear)) {
+      return res.status(400).json({ error: "El año académico es obligatorio y debe ser 4.º o 5.º" });
+    }
     
     // Verificar si ya existe
     const existing = await getOneQuery<User>("SELECT * FROM users WHERE email = ?", [email]);
     if (existing) {
-      return res.status(409).json({ error: "El email ya está registrado" });
+      return res.status(409).json({
+        error: "Este correo electrónico ya está registrado. Inicia sesión o usa otro correo.",
+      });
     }
     
     const result = await runQuery(
-      "INSERT INTO users (name, email, password, role, xp_points, level) VALUES (?, ?, ?, ?, ?, ?)",
-      [name, email, password, role, 0, 1]
+      "INSERT INTO users (name, email, password, role, xp_points, level, academic_year) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [name, email, password, role, 0, 1, role === 'student' ? academicYear : null]
     );
     
     const newUser = await getOneQuery<User>(
-      "SELECT id, name, email, role, xp_points, level, created_at FROM users WHERE id = ?",
+      "SELECT id, name, email, role, academic_year, xp_points, level, created_at FROM users WHERE id = ?",
       [result.lastID]
     );
     
@@ -92,14 +119,25 @@ app.post("/api/users", async (req, res) => {
 // Login
 app.post("/api/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Completa tu correo electrónico y contraseña." });
+    }
+
+    // Buscar primero por correo para poder señalar el error exacto.
     const user = await getOneQuery<User>(
-      "SELECT * FROM users WHERE email = ? AND password = ?",
-      [email, password]
+      "SELECT * FROM users WHERE email = ?",
+      [email]
     );
-    
+
     if (!user) {
-      return res.status(401).json({ error: "Credenciales incorrectas" });
+      return res.status(404).json({ error: "Este correo electrónico no está registrado." });
+    }
+
+    if (user.password !== password) {
+      return res.status(401).json({ error: "Contraseña incorrecta. Verifica e intenta nuevamente." });
     }
     
     // Registrar actividad de login
@@ -121,7 +159,7 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/admin/users", async (req, res) => {
   try {
     const users = await getQuery<User>(
-      "SELECT id, name, email, role, xp_points, level, created_at FROM users ORDER BY created_at DESC"
+      "SELECT id, name, email, role, academic_year, xp_points, level, created_at FROM users ORDER BY created_at DESC"
     );
     res.json(users);
   } catch (error: any) {
@@ -292,6 +330,62 @@ app.get("/api/modules", async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: "Error al obtener módulos", detail: error.message });
   }
+});
+
+// ==================== GUARDA DE ACCESO POR AÑO ACADÉMICO ====================
+
+// Resuelve el sujeto a partir del identificador enviado por el cliente.
+// Se usa el encabezado `x-user-id` (o `?userId=`) porque el proyecto no
+// implementa sesiones con token; el resto de la app identifica al usuario por id.
+async function resolveRequestSubject(req: express.Request): Promise<PermissionSubject | null> {
+  const raw = req.header("x-user-id") ?? (typeof req.query.userId === "string" ? req.query.userId : undefined);
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return null;
+
+  const user = await getOneQuery<{ role: string; academic_year: string | null }>(
+    "SELECT role, academic_year FROM users WHERE id = ?",
+    [id]
+  );
+  if (!user) return null;
+
+  return {
+    role: user.role === "admin" ? "admin" : "student",
+    academicYear: normalizeAcademicYear(user.academic_year),
+  };
+}
+
+// Middleware reutilizable: bloquea el endpoint si el usuario no cumple la
+// condición de año del módulo. Evita el acceso directo manipulando la UI.
+function requireModuleAccess(moduleKey: RestrictedModuleKey) {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const subject = await resolveRequestSubject(req);
+      if (!subject) {
+        return res.status(401).json({ error: "Usuario no autenticado o inexistente." });
+      }
+      if (!canAccessModule(moduleKey, subject)) {
+        return res.status(403).json({
+          error: moduleAccessDeniedMessage(moduleKey),
+          code: "MODULE_FORBIDDEN",
+          module: moduleKey,
+        });
+      }
+      next();
+    } catch (error: any) {
+      res.status(500).json({ error: "Error al verificar permisos", detail: error.message });
+    }
+  };
+}
+
+// Endpoint protegido del módulo de Química Orgánica. El cliente lo consulta
+// como verificación adicional antes de renderizar el módulo.
+app.get("/api/modules/quimica_organica", requireModuleAccess("quimica_organica"), (_req, res) => {
+  res.json({
+    key: "quimica_organica",
+    title: "Química Orgánica",
+    min_academic_year: "5",
+    access: "granted",
+  });
 });
 
 // ==================== ENDPOINTS DE SIMULACIONES ====================
