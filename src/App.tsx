@@ -29,7 +29,8 @@ import {
   AlertCircle,
   PlusCircle,
   Sun,
-  Moon
+  Moon,
+  Menu
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -45,6 +46,10 @@ import { ElementData, ReactionResult, ActivityItem, LabReport, CourseModule } fr
 import { ALL_118_ELEMENTS, PeriodicElement } from './all118Elements';
 import { balanceEquation, getMolarMass } from './balancer';
 import OrganicChemistry from './OrganicChemistry';
+import { useUserProgress } from './hooks/useUserProgress';
+import { PERIODIC_LESSON_ID, QUIZ_LESSON_ID, formatNumber } from './utils/progress';
+import { markLessonCompleted } from './utils/progressStore';
+import { levelFromXp } from './utils/level';
 import {
   ACADEMIC_YEARS,
   academicYearLabel,
@@ -125,6 +130,10 @@ export default function App() {
     }
     return null;
   });
+
+  // Progreso real del estudiante, centralizado para dashboard y perfil.
+  const progress = useUserProgress({ userId });
+
   const [loginMode, setLoginMode] = useState<'signin' | 'signup'>('signin');
   const [loginEmail, setLoginEmail] = useState<string>('alex.martinez@mylab.edu');
   const [loginPassword, setLoginPassword] = useState<string>('password123');
@@ -137,6 +146,8 @@ export default function App() {
   const [authAlert, setAuthAlert] = useState<AuthAlert | null>(null);
 
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  // Menú lateral móvil (el sidebar de escritorio está oculto en pantallas < lg).
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // Tema claro / oscuro (persistido en localStorage)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -298,6 +309,9 @@ export default function App() {
           glow_color: result.glowColor
         })
       });
+
+      // Refresca el contador real de simulaciones del perfil.
+      void progress.refresh();
     } catch (error) {
       console.error('Error guardando simulación:', error);
     }
@@ -308,8 +322,8 @@ export default function App() {
     try {
       const user = JSON.parse(localStorage.getItem('mylab_active_user') || '{}');
       if (!user.id) return;
-      
-      await fetch('/api/quiz-results', {
+
+      const response = await fetch('/api/quiz-results', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -320,11 +334,18 @@ export default function App() {
           validation_code: code
         })
       });
-      
+
       if (passed) {
         const userData = JSON.parse(localStorage.getItem('mylab_active_user') || '{}');
         userData.xp_points = (userData.xp_points || 0) + (score * 50);
+        userData.level = levelFromXp(userData.xp_points);
         localStorage.setItem('mylab_active_user', JSON.stringify(userData));
+        markLessonCompleted(user.id, QUIZ_LESSON_ID);
+      }
+
+      // El servidor ya persistió el intento: relee XP, nivel y agregados.
+      if (response.ok) {
+        await progress.refresh();
       }
     } catch (error) {
       console.error('Error guardando resultado de quiz:', error);
@@ -1244,23 +1265,113 @@ export default function App() {
     setActiveTab('organica');
   };
 
+  // Navegación compartida entre el sidebar de escritorio y el menú móvil,
+  // para que ambos mantengan exactamente las mismas opciones y permisos.
+  const renderNavItems = (onNavigate?: () => void) => {
+    const go = (tab: string) => {
+      setActiveTab(tab);
+      onNavigate?.();
+    };
+    const itemClass = (isActive: boolean, variant: 'default' | 'admin' = 'default') => {
+      if (!isActive) {
+        return 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all text-[#494453] hover:bg-[#f1f4f7]';
+      }
+      return variant === 'admin'
+        ? 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all bg-[#ba1a1a] text-white shadow-md shadow-[#ba1a1a]/15'
+        : 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all bg-[#461599] text-white shadow-md shadow-[#461599]/15';
+    };
+
+    return (
+      <>
+        <button onClick={() => go('dashboard')} className={itemClass(activeTab === 'dashboard')}>
+          <span className="material-symbols-outlined text-lg">dashboard</span>
+          <span>Dashboard</span>
+        </button>
+
+        <button onClick={() => go('periodic')} className={itemClass(activeTab === 'periodic')}>
+          <span className="material-symbols-outlined text-lg">grid_view</span>
+          <span>Tabla Periódica</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('simulator');
+            onNavigate?.();
+            if (!reactionResult) {
+              handleSimulateCustomReaction();
+            }
+          }}
+          className={itemClass(activeTab === 'simulator')}
+        >
+          <span className="material-symbols-outlined text-lg">science</span>
+          <span>Reactor Químico</span>
+        </button>
+
+        {/* Química Orgánica: visible solo si el año académico lo permite */}
+        {canAccessOrganic && (
+          <button
+            onClick={() => {
+              onNavigate?.();
+              void openOrganicChemistry();
+            }}
+            className={itemClass(activeTab === 'organica')}
+          >
+            <span className="material-symbols-outlined text-lg">science</span>
+            <span>Química Orgánica</span>
+          </button>
+        )}
+
+        <button onClick={() => go('quizzes')} className={itemClass(activeTab === 'quizzes')}>
+          <span className="material-symbols-outlined text-lg">quiz</span>
+          <span>Cuestionarios</span>
+        </button>
+
+        <button onClick={() => go('profile')} className={itemClass(activeTab === 'profile')}>
+          <span className="material-symbols-outlined text-lg">person</span>
+          <span>Estudiante Perfil</span>
+        </button>
+
+        {/* ADMIN PANEL - Solo visible para admins */}
+        {userRole === 'admin' && (
+          <button
+            onClick={() => {
+              go('admin');
+              loadAdminStats();
+              loadAdminUsers();
+              loadAdminActivities();
+            }}
+            className={itemClass(activeTab === 'admin', 'admin')}
+          >
+            <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
+            <span>Admin Panel</span>
+            {adminStats?.pending_reports > 0 && (
+              <span className="ml-auto bg-[#ba1a1a] text-white text-[9px] font-black px-2 py-0.5 rounded-full">
+                {adminStats.pending_reports}
+              </span>
+            )}
+          </button>
+        )}
+      </>
+    );
+  };
+
   // Render Access / Login Screen
   if (!userRole) {
     return (
-      <div className="min-h-screen bg-[#f7fafd] flex items-center justify-center p-4 md:p-12 relative overflow-hidden font-sans text-[#181c1e] animated-bg">
+      <div className="min-h-screen bg-[#f7fafd] flex items-start sm:items-center justify-center p-4 pt-16 pb-8 md:p-12 relative overflow-x-hidden font-sans text-[#181c1e] animated-bg">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#5e35b1]/10 rounded-full blur-3xl"></div>
         <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-[#ffdad6]/20 rounded-full blur-3xl"></div>
 
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="absolute top-6 right-6 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-white/70 hover:bg-white/90 border border-[#cbc3d5]/40 text-[#494453] shadow-sm backdrop-blur transition-colors cursor-pointer"
+          className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20 w-10 h-10 flex items-center justify-center rounded-full bg-white/70 hover:bg-white/90 border border-[#cbc3d5]/40 text-[#494453] shadow-sm backdrop-blur transition-colors cursor-pointer"
           title={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
           aria-label="Alternar modo oscuro"
         >
           {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
         </button>
 
-        <div className="relative w-full max-w-5xl grid md:grid-cols-12 gap-8 items-center bg-white/70 backdrop-blur-xl border border-white/50 shadow-2xl rounded-[2.5rem] p-6 md:p-10 z-10 animate-fade-in">
+        <div className="relative w-full max-w-5xl grid md:grid-cols-12 gap-8 items-center bg-white/70 backdrop-blur-xl border border-white/50 shadow-2xl rounded-[2rem] sm:rounded-[2.5rem] p-5 sm:p-6 md:p-10 z-10 animate-fade-in">
           <div className="md:col-span-6 hidden md:flex flex-col justify-between h-full space-y-8 pr-4">
             <div className="flex items-center gap-2.5">
               <div className="w-12 h-12 bg-[#461599] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-[#461599]/20">
@@ -1527,7 +1638,7 @@ export default function App() {
     <div className="min-h-screen bg-[#f7fafd] flex font-sans text-[#181c1e] relative">
       
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-[#181c1e] text-white px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 animate-slide-in">
+        <div className="fixed bottom-24 lg:bottom-6 right-4 sm:right-6 z-50 max-w-[calc(100vw-2rem)] bg-[#181c1e] text-white px-5 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 animate-slide-in">
           <Sparkles className="text-[#fdd34d] shrink-0" size={18} />
           <p className="text-xs font-bold">{toastMessage}</p>
           <button onClick={() => setToastMessage(null)} className="text-[#7b7484] hover:text-white">
@@ -1537,21 +1648,22 @@ export default function App() {
       )}
 
       {selectedCritique && (
-        <div className="fixed inset-0 z-50 bg-[#181c1e]/40 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2rem] p-6 md:p-8 max-w-xl w-full shadow-2xl border border-white relative space-y-5 animate-scale-in">
+        <div className="fixed inset-0 z-50 bg-[#181c1e]/40 backdrop-blur-md flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-[2rem] p-5 sm:p-6 md:p-8 my-8 sm:my-0 max-w-xl w-full shadow-2xl border border-white relative space-y-5 animate-scale-in">
             <button 
               onClick={() => setSelectedCritique(null)}
-              className="absolute top-5 right-5 text-[#7b7484] hover:text-[#ba1a1a] transition-all p-1.5 rounded-full hover:bg-[#f1f4f7]"
+              className="absolute top-4 right-4 sm:top-5 sm:right-5 text-[#7b7484] hover:text-[#ba1a1a] transition-all p-1.5 rounded-full hover:bg-[#f1f4f7]"
+              aria-label="Cerrar reporte"
             >
               <X size={18} />
             </button>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-[#461599]/10 rounded-2xl flex items-center justify-center text-[#461599]">
+            <div className="flex items-center gap-3 pr-8">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-[#461599]/10 rounded-2xl flex items-center justify-center text-[#461599]">
                 <span className="material-symbols-outlined text-2xl">lab_research</span>
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className="text-[10px] uppercase font-bold text-[#461599] tracking-wider px-2 py-0.5 rounded-full bg-[#461599]/10">Informe escolar</span>
-                <h3 className="text-xl font-bold text-[#181c1e] tracking-tight">{selectedCritique.title}</h3>
+                <h3 className="text-lg sm:text-xl font-bold text-[#181c1e] tracking-tight">{selectedCritique.title}</h3>
                 <p className="text-xs text-[#7b7484]">Expedido por: <span className="font-bold text-[#181c1e]">{selectedCritique.sender}</span></p>
               </div>
             </div>
@@ -1568,7 +1680,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2 justify-end">
+            <div className="flex flex-wrap gap-2 pt-2 justify-end">
               <button 
                 onClick={() => {
                   showToast(`Aprobado reporte de ${selectedCritique.sender}. +150 XP asignados.`);
@@ -1633,110 +1745,7 @@ export default function App() {
           </button>
 
           <nav className="flex flex-col space-y-1">
-            <button 
-              onClick={() => setActiveTab('dashboard')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'dashboard' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">dashboard</span>
-              <span>Dashboard</span>
-            </button>
-
-            <button 
-              onClick={() => setActiveTab('periodic')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'periodic' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">grid_view</span>
-              <span>Tabla Periódica</span>
-            </button>
-
-            <button 
-              onClick={() => {
-                setActiveTab('simulator');
-                if(!reactionResult){
-                  handleSimulateCustomReaction();
-                }
-              }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'simulator' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">science</span>
-              <span>Reactor Químico</span>
-            </button>
-
-            {/* 🆕 QUÍMICA ORGÁNICA - visible solo si el año académico lo permite */}
-            {canAccessOrganic && (
-              <button 
-                onClick={openOrganicChemistry}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                  activeTab === 'organica' 
-                    ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                    : 'text-[#494453] hover:bg-[#f1f4f7]'
-                }`}
-              >
-                <span className="material-symbols-outlined text-lg">science</span>
-                <span>Química Orgánica</span>
-              </button>
-            )}
-
-            <button 
-              onClick={() => setActiveTab('quizzes')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'quizzes' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">quiz</span>
-              <span>Cuestionarios</span>
-            </button>
-
-            <button 
-              onClick={() => setActiveTab('profile')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                activeTab === 'profile' 
-                  ? 'bg-[#461599] text-white shadow-md shadow-[#461599]/15' 
-                  : 'text-[#494453] hover:bg-[#f1f4f7]'
-              }`}
-            >
-              <span className="material-symbols-outlined text-lg">person</span>
-              <span>Estudiante Perfil</span>
-            </button>
-
-            {/* ADMIN PANEL - Solo visible para admins */}
-            {userRole === 'admin' && (
-              <button 
-                onClick={() => {
-                  setActiveTab('admin');
-                  loadAdminStats();
-                  loadAdminUsers();
-                  loadAdminActivities();
-                }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left text-xs font-bold transition-all ${
-                  activeTab === 'admin' 
-                    ? 'bg-[#ba1a1a] text-white shadow-md shadow-[#ba1a1a]/15' 
-                    : 'text-[#494453] hover:bg-[#f1f4f7]'
-                }`}
-              >
-                <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
-                <span>Admin Panel</span>
-                {adminStats?.pending_reports > 0 && (
-                  <span className="ml-auto bg-[#ba1a1a] text-white text-[9px] font-black px-2 py-0.5 rounded-full">
-                    {adminStats.pending_reports}
-                  </span>
-                )}
-              </button>
-            )}
+            {renderNavItems()}
           </nav>
         </div>
 
@@ -1762,58 +1771,159 @@ export default function App() {
         </div>
       </aside>
 
-      {/* MOBILE PORT NAVIGATION */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#cbc3d5]/40 h-16 px-4 py-2 z-40 flex justify-around items-center">
-        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center flex-1 ${activeTab === 'dashboard' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
+      {/* MOBILE MENU DRAWER */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden fixed inset-0 z-50">
+          <div
+            className="absolute inset-0 bg-[#181c1e]/50 backdrop-blur-sm"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
+          ></div>
+
+          <aside className="absolute left-0 top-0 h-full w-72 max-w-[85vw] bg-white shadow-2xl flex flex-col justify-between animate-slide-in">
+            <div className="p-5 space-y-5 overflow-y-auto">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setActiveTab('dashboard');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex items-center gap-3 text-left"
+                >
+                  <div className="w-10 h-10 bg-[#461599] rounded-xl flex items-center justify-center text-white shadow-md shadow-[#461599]/20">
+                    <span className="material-symbols-outlined text-xl filled">science</span>
+                  </div>
+                  <div>
+                    <h1 className="text-lg font-black text-[#461599] tracking-tight leading-none">MyLab</h1>
+                    <p className="text-[10px] text-[#7b7484] font-bold tracking-wider uppercase">Laboratorio Virtual</p>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="w-9 h-9 flex items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] transition-colors"
+                  aria-label="Cerrar menú"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <button
+                onClick={() => {
+                  setActiveTab('simulator');
+                  setMobileMenuOpen(false);
+                  showToast('Reactor químico de MyLab online.');
+                }}
+                className="w-full p-4 bg-[#f1f4f7] hover:bg-[#ebeef1] border border-[#cbc3d5]/30 rounded-2xl flex items-center justify-between text-left transition-all"
+              >
+                <div>
+                  <span className="text-[9px] font-bold text-[#7b7484] tracking-widest block uppercase">REACTOR</span>
+                  <span className="text-sm font-bold text-[#181c1e]">Experimentar</span>
+                </div>
+                <div className="w-8 h-8 rounded-xl bg-[#461599] text-white flex items-center justify-center shadow-lg shadow-[#461599]/20">
+                  <Beaker size={16} />
+                </div>
+              </button>
+
+              <nav className="flex flex-col space-y-1">
+                {renderNavItems(() => setMobileMenuOpen(false))}
+              </nav>
+            </div>
+
+            <div className="p-5 border-t border-[#cbc3d5]/30">
+              <div className="flex items-center gap-3 p-1 mb-2">
+                <div className="w-10 h-10 rounded-full bg-[#461599]/10 text-[#461599] font-black text-xs flex items-center justify-center">
+                  {userName[0]}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-[#181c1e] truncate">{userName}</p>
+                  <p className="text-[10px] text-[#7b7484] font-medium capitalize">
+                    {userRole === 'admin' ? '👑 Administrador' : '🎓 Estudiante'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleCustomLogout();
+                }}
+                className="w-full py-2.5 bg-[#f1f4f7] hover:bg-[#ffdad6] text-[#ba1a1a] border border-[#cbc3d5]/30 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <LogOut size={13} />
+                <span>Cerrar Sesión</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* MOBILE BOTTOM NAVIGATION - 5 accesos fijos (Perfil incluido) */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#cbc3d5]/40 min-h-16 px-1 pt-1.5 z-40 flex justify-around items-center"
+        style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}>
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          aria-current={activeTab === 'dashboard' ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 py-1 ${activeTab === 'dashboard' ? 'text-[#461599]' : 'text-[#7b7484]'}`}
+        >
           <span className="material-symbols-outlined text-lg">dashboard</span>
-          <span className="text-[9px] font-bold">Resumen</span>
+          <span className="text-[9px] font-bold truncate max-w-full px-0.5">Resumen</span>
         </button>
-        <button onClick={() => setActiveTab('periodic')} className={`flex flex-col items-center flex-1 ${activeTab === 'periodic' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
+        <button
+          onClick={() => setActiveTab('periodic')}
+          aria-current={activeTab === 'periodic' ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 py-1 ${activeTab === 'periodic' ? 'text-[#461599]' : 'text-[#7b7484]'}`}
+        >
           <span className="material-symbols-outlined text-lg">grid_view</span>
-          <span className="text-[9px] font-bold">Tabla</span>
+          <span className="text-[9px] font-bold truncate max-w-full px-0.5">Tabla</span>
         </button>
-        <button onClick={() => setActiveTab('simulator')} className={`flex flex-col items-center flex-1 ${activeTab === 'simulator' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
+        <button
+          onClick={() => setActiveTab('simulator')}
+          aria-current={activeTab === 'simulator' ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 py-1 ${activeTab === 'simulator' ? 'text-[#461599]' : 'text-[#7b7484]'}`}
+        >
           <span className="material-symbols-outlined text-lg">science</span>
-          <span className="text-[9px] font-bold">Reactor</span>
+          <span className="text-[9px] font-bold truncate max-w-full px-0.5">Reactor</span>
         </button>
-        {canAccessOrganic && (
-          <button onClick={openOrganicChemistry} className={`flex flex-col items-center flex-1 ${activeTab === 'organica' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
-            <span className="material-symbols-outlined text-lg">science</span>
-            <span className="text-[9px] font-bold">Orgánica</span>
-          </button>
-        )}
-        <button onClick={() => setActiveTab('quizzes')} className={`flex flex-col items-center flex-1 ${activeTab === 'quizzes' ? 'text-[#461599]' : 'text-[#7b7484]'}`}>
+        <button
+          onClick={() => setActiveTab('quizzes')}
+          aria-current={activeTab === 'quizzes' ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 py-1 ${activeTab === 'quizzes' ? 'text-[#461599]' : 'text-[#7b7484]'}`}
+        >
           <span className="material-symbols-outlined text-lg">quiz</span>
-          <span className="text-[9px] font-bold">Cuestionario</span>
+          <span className="text-[9px] font-bold truncate max-w-full px-0.5">Cuestionario</span>
         </button>
-        {userRole === 'admin' && (
-          <button onClick={() => {
-            setActiveTab('admin');
-            loadAdminStats();
-            loadAdminUsers();
-            loadAdminActivities();
-          }} className={`flex flex-col items-center flex-1 ${activeTab === 'admin' ? 'text-[#ba1a1a]' : 'text-[#7b7484]'}`}>
-            <span className="material-symbols-outlined text-lg">admin_panel_settings</span>
-            <span className="text-[9px] font-bold">Admin</span>
-          </button>
-        )}
+        <button
+          onClick={() => setActiveTab('profile')}
+          aria-current={activeTab === 'profile' ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center gap-0.5 flex-1 min-w-0 py-1 ${activeTab === 'profile' ? 'text-[#461599]' : 'text-[#7b7484]'}`}
+        >
+          <span className="material-symbols-outlined text-lg">person</span>
+          <span className="text-[9px] font-bold truncate max-w-full px-0.5">Perfil</span>
+        </button>
       </div>
 
       {/* MAIN CONTENT */}
-      <div className="flex-1 lg:ml-64 flex flex-col min-w-0 pb-20 lg:pb-0">
+      <div className="flex-1 lg:ml-64 flex flex-col min-w-0 pb-24 lg:pb-0">
         
-        <header className="sticky top-0 bg-white/80 backdrop-blur-md px-6 py-4 border-b border-[#cbc3d5]/30 flex justify-between items-center z-30">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-[#461599] font-black uppercase tracking-wider bg-[#461599]/10 px-3 py-1 rounded-full">
+        <header className="sticky top-0 bg-white/80 backdrop-blur-md px-3 sm:px-6 py-3 sm:py-4 border-b border-[#cbc3d5]/30 flex justify-between items-center gap-2 z-30">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="lg:hidden w-9 h-9 shrink-0 flex items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] transition-colors"
+              aria-label="Abrir menú de navegación"
+              title="Menú"
+            >
+              <Menu size={18} />
+            </button>
+            <span className="text-[10px] sm:text-xs text-[#461599] font-black uppercase tracking-wider bg-[#461599]/10 px-2.5 sm:px-3 py-1 rounded-full whitespace-nowrap">
               LAB-ON-AIR
             </span>
             <div className="hidden lg:block h-6 w-[1px] bg-[#cbc3d5]/50"></div>
-            <p className="hidden lg:block text-xs text-[#7b7484] font-bold">
+            <p className="hidden lg:block text-xs text-[#7b7484] font-bold truncate">
               {userName} • {userRole === 'admin' ? '👑 Administrador' : '🎓 Estudiante Premium'}
             </p>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1 sm:gap-4 shrink-0">
             <div className="relative group hidden sm:block">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7b7484]">
                 <Search size={15} />
@@ -1823,15 +1933,16 @@ export default function App() {
                 placeholder="Buscar reactivos o lecciones..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 pr-4 py-2 bg-[#f1f4f7] border border-[#cbc3d5]/15 focus:border-[#461599] rounded-full text-xs font-semibold outline-none w-64 placeholder:text-[#7b7484]/70 transition-all focus:bg-white"
+                className="pl-9 pr-4 py-2 bg-[#f1f4f7] border border-[#cbc3d5]/15 focus:border-[#461599] rounded-full text-xs font-semibold outline-none w-40 lg:w-64 placeholder:text-[#7b7484]/70 transition-all focus:bg-white"
               />
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5 sm:gap-1">
               <button 
                 onClick={() => showToast('Bandeja de entrada sin mensajes nuevos.')}
-                className="w-9 h-9 flex items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] relative transition-colors"
+                className="hidden sm:flex w-9 h-9 items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] relative transition-colors"
                 title="Mensajes"
+                aria-label="Mensajes"
               >
                 <Mail size={16} />
               </button>
@@ -1842,6 +1953,7 @@ export default function App() {
                 }}
                 className="w-9 h-9 flex items-center justify-center rounded-full text-[#494453] hover:bg-[#f1f4f7] relative transition-colors"
                 title="Notificaciones"
+                aria-label="Notificaciones"
               >
                 <Bell size={16} />
                 <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#ba1a1a]"></span>
@@ -1855,20 +1967,30 @@ export default function App() {
               >
                 {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
               </button>
+
+              {/* Acceso directo al perfil en móvil/tablet */}
+              <button
+                onClick={() => setActiveTab('profile')}
+                className="lg:hidden w-9 h-9 ml-0.5 flex items-center justify-center rounded-full bg-[#461599]/10 text-[#461599] text-xs font-black hover:bg-[#eaddff] transition-colors"
+                title="Mi perfil"
+                aria-label="Mi perfil"
+              >
+                {userName ? userName[0].toUpperCase() : <User size={16} />}
+              </button>
             </div>
           </div>
         </header>
 
-        <main className="p-6">
+        <main className="p-4 sm:p-6">
           
           {/* TAB: DASHBOARD */}
           {activeTab === 'dashboard' && (
             <div className="space-y-8 animate-fade-in">
-              <div className="bg-gradient-to-r from-[#461599] to-[#5e35b1] rounded-[2.25rem] p-8 md:p-10 text-white relative overflow-hidden flex flex-col md:flex-row justify-between items-center gap-6 shadow-xl shadow-[#461599]/10">
+              <div className="bg-gradient-to-r from-[#461599] to-[#5e35b1] rounded-[2rem] sm:rounded-[2.25rem] p-6 sm:p-8 md:p-10 text-white relative overflow-hidden flex flex-col md:flex-row justify-between items-center gap-6 shadow-xl shadow-[#461599]/10">
                 <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:24px_24px]"></div>
                 
                 <div className="space-y-3 max-w-lg relative z-10 text-center md:text-left">
-                  <h2 className="text-3xl md:text-4xl font-black tracking-tight flex items-center justify-center md:justify-start gap-3">
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-black tracking-tight flex items-center justify-center md:justify-start gap-3">
                     ¡Hola, {userName}! 
                     <span className="animate-bounce">👋</span>
                   </h2>
@@ -1891,7 +2013,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="relative w-44 h-44 shrink-0 flex items-center justify-center z-10">
+                <div className="relative w-44 h-44 shrink-0 hidden sm:flex items-center justify-center z-10">
                   <div className="absolute inset-0 bg-[#eaddff]/20 rounded-full blur-2xl"></div>
                   <div className="relative w-36 h-36 border border-white/20 bg-white/15 backdrop-blur-md rounded-[2.5rem] flex items-center justify-center shadow-xl">
                     <span className="material-symbols-outlined text-7xl text-[#fdd34d] animate-pulse filled">science</span>
@@ -1904,44 +2026,54 @@ export default function App() {
               <div className="space-y-4">
                 <h3 className="text-base font-bold text-[#181c1e] tracking-tight px-1">Resumen del Curso en Curso</h3>
                 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-5 rounded-[1.75rem] flex items-center gap-4 shadow-sm hover:scale-[1.02] transition-all">
-                    <div className="w-12 h-12 bg-[#ffe087] rounded-2xl flex items-center justify-center text-[#725b00]">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-3.5 sm:p-5 rounded-[1.75rem] flex items-center gap-3 sm:gap-4 shadow-sm hover:scale-[1.02] transition-all">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-[#ffe087] rounded-2xl flex items-center justify-center text-[#725b00]">
                       <Clock size={20} />
                     </div>
                     <div>
-                      <p className="text-2xl font-black text-[#181c1e]">83%</p>
+                      <p className="text-2xl font-black text-[#181c1e]">{progress.modulesPercent}%</p>
                       <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Módulos de Práctica</p>
+                      <p className="text-[9px] text-[#7b7484] font-semibold">
+                        {progress.modulesCompleted} de {progress.modulesTotal} módulos
+                      </p>
                     </div>
                   </div>
 
-                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-5 rounded-[1.75rem] flex items-center gap-4 shadow-sm hover:scale-[1.02] transition-all">
-                    <div className="w-12 h-12 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-600">
+                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-3.5 sm:p-5 rounded-[1.75rem] flex items-center gap-3 sm:gap-4 shadow-sm hover:scale-[1.02] transition-all">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-600">
                       <CheckCircle size={20} />
                     </div>
                     <div>
-                      <p className="text-2xl font-black text-[#181c1e]">50%</p>
+                      <p className="text-2xl font-black text-[#181c1e]">{progress.lessonsPercent}%</p>
                       <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Avance Práctico</p>
+                      <p className="text-[9px] text-[#7b7484] font-semibold">
+                        {progress.lessonsCompleted} de {progress.lessonsTotal} lecciones
+                      </p>
                     </div>
                   </div>
 
-                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-5 rounded-[1.75rem] flex items-center gap-4 shadow-sm hover:scale-[1.02] transition-all">
-                    <div className="w-12 h-12 bg-rose-100 rounded-2xl flex items-center justify-center text-rose-650">
+                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-3.5 sm:p-5 rounded-[1.75rem] flex items-center gap-3 sm:gap-4 shadow-sm hover:scale-[1.02] transition-all">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-rose-100 rounded-2xl flex items-center justify-center text-rose-650">
                       <AlertTriangle size={20} />
                     </div>
                     <div>
-                      <p className="text-2xl font-black text-[#181c1e]">70%</p>
-                      <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Pruebas en Cola</p>
+                      <p className="text-2xl font-black text-[#181c1e]">{progress.passRate}%</p>
+                      <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Tasa de Aprobación</p>
+                      <p className="text-[9px] text-[#7b7484] font-semibold">
+                        {progress.quizzesPassed} de {progress.quizAttempts} intentos
+                      </p>
                     </div>
                   </div>
 
-                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-5 rounded-[1.75rem] flex items-center gap-4 shadow-sm hover:scale-[1.02] transition-all">
-                    <div className="w-12 h-12 bg-[#eaddff] rounded-2xl flex items-center justify-center text-[#461599]">
+                  <div className="bg-white hover:bg-[#f1f4f7]/30 border border-[#cbc3d5]/35 p-3.5 sm:p-5 rounded-[1.75rem] flex items-center gap-3 sm:gap-4 shadow-sm hover:scale-[1.02] transition-all">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 bg-[#eaddff] rounded-2xl flex items-center justify-center text-[#461599]">
                       <Sparkles size={20} />
                     </div>
                     <div>
-                      <p className="text-2xl font-black text-[#181c1e]">62%</p>
-                      <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Tareas completadas</p>
+                      <p className="text-2xl font-black text-[#181c1e]">{progress.simulations}</p>
+                      <p className="text-[10px] font-bold text-[#7b7484] uppercase tracking-wider">Simulaciones Realizadas</p>
+                      <p className="text-[9px] text-[#7b7484] font-semibold">en el reactor virtual</p>
                     </div>
                   </div>
                 </div>
@@ -1961,7 +2093,23 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {courseModulesList.map((mod) => (
+                  {courseModulesList.map((mod) => {
+                    const moduleProgress = progress.perModule.find((item) => item.id === mod.id);
+                    const modulePercent = moduleProgress?.percent ?? 0;
+                    const statusLabel =
+                      modulePercent >= 100
+                        ? 'Completado'
+                        : modulePercent > 0
+                          ? `${modulePercent}% completado`
+                          : 'Sin iniciar';
+                    const statusColor =
+                      modulePercent >= 100
+                        ? 'text-emerald-600'
+                        : modulePercent > 0
+                          ? 'text-indigo-600'
+                          : 'text-[#7b7484]';
+
+                    return (
                     <div 
                       key={mod.id}
                       className="bg-white border border-[#cbc3d5]/35 rounded-[1.75rem] p-5 flex items-center justify-between hover:border-[#461599]/40 transition-all shadow-sm"
@@ -1982,8 +2130,8 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center gap-3">
-                        <span className={`text-xs font-bold ${mod.status === 'Iniciado' ? 'text-indigo-600' : mod.status === 'Listo' ? 'text-emerald-600' : 'text-amber-500'}`}>
-                          {mod.status}
+                        <span className={`text-xs font-bold ${statusColor}`}>
+                          {statusLabel}
                         </span>
                         <button 
                           onClick={() => {
@@ -2001,7 +2149,8 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2070,6 +2219,8 @@ export default function App() {
                           key={el.symbol}
                           onClick={() => {
                             setSelectedElement(el);
+                            // Lección real del módulo 1: explorar la tabla.
+                            markLessonCompleted(userId, PERIODIC_LESSON_ID);
                             showToast(`Seleccionado: ${el.name} (${el.symbol})`);
                           }}
                           style={{ borderColor: isSelected ? '#461599' : `${catColor}35` }}
@@ -2645,7 +2796,7 @@ export default function App() {
           {/* 🆕 TAB: QUÍMICA ORGÁNICA (restringida por año académico) */}
           {activeTab === 'organica' && (
             canAccessOrganic ? (
-              <OrganicChemistry onToast={showToast} />
+              <OrganicChemistry onToast={showToast} userId={userId} />
             ) : (
               <div className="bg-white border border-[#cbc3d5]/35 rounded-[2rem] p-8 max-w-xl mx-auto text-center space-y-4 shadow-sm animate-fade-in">
                 <div className="w-16 h-16 bg-[#ffdad6] text-[#ba1a1a] rounded-2xl flex items-center justify-center mx-auto">
@@ -3015,16 +3166,41 @@ export default function App() {
                       </span>
                     )}
                     <span className="bg-[#ffe087] text-[#725b00] text-[10px] font-bold px-3 py-1 rounded-xl">
-                      Puntos de Honor: 2,450 XP
+                      Puntos de Honor: {formatNumber(progress.xp)} XP
                     </span>
                     <span className="bg-[#ffd9e1] text-[#760038] text-[10px] font-bold px-3 py-1 rounded-xl">
-                      Nivel Técnico: 14
+                      Nivel Técnico: {progress.level}
                     </span>
                     {userRole === 'admin' && (
                       <span className="bg-[#ba1a1a]/10 text-[#ba1a1a] text-[10px] font-bold px-3 py-1 rounded-xl">
                         👑 Administrador
                       </span>
                     )}
+                  </div>
+
+                  {/* Progreso real: lecciones completadas sobre el total del curso */}
+                  <div className="pt-1 space-y-1.5 max-w-md mx-auto md:mx-0">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-[#7b7484]">
+                      <span className="uppercase tracking-wider">Progreso del Curso</span>
+                      <span className="text-[#461599]">{progress.overallPercent}%</span>
+                    </div>
+                    <div
+                      className="h-2 rounded-full bg-[#f1f4f7] overflow-hidden"
+                      role="progressbar"
+                      aria-valuenow={progress.overallPercent}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label="Progreso del curso"
+                    >
+                      <div
+                        className="h-full rounded-full bg-[#461599] transition-all duration-500"
+                        style={{ width: `${progress.overallPercent}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-[10px] text-[#7b7484] font-medium">
+                      {progress.lessonsCompleted} de {progress.lessonsTotal} lecciones &bull;{' '}
+                      {progress.modulesCompleted} de {progress.modulesTotal} módulos completados
+                    </p>
                   </div>
                 </div>
 
@@ -3036,11 +3212,19 @@ export default function App() {
                   </label>
                   <p className="text-[9px] text-[#7b7484] font-medium">Mails semanales</p>
                 </div>
+
+                <button
+                  onClick={handleCustomLogout}
+                  className="lg:hidden w-full py-2.5 bg-[#f1f4f7] hover:bg-[#ffdad6] text-[#ba1a1a] border border-[#cbc3d5]/30 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <LogOut size={13} />
+                  <span>Cerrar Sesión</span>
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-white border border-[#cbc3d5]/35 rounded-[2rem] p-6 space-y-3">
-                  <p className="text-xs font-black text-[#7b7484] uppercase">Cursos Recomendados para Alex</p>
+                  <p className="text-xs font-black text-[#7b7484] uppercase">Cursos Recomendados para {userName ? userName.split(' ')[0] : 'ti'}</p>
                   <h4 className="text-sm font-bold text-[#181c1e]">Introducción a Cinética Química y Redox</h4>
                   <div className="w-full bg-[#f1f4f7] rounded-xl p-3 text-2xs text-[#494453] leading-relaxed">
                     Aprovecha tus habilidades en estequiometría avanzada para adentrarte en la velocidad de las reacciones y reactivos límite.
@@ -3048,13 +3232,19 @@ export default function App() {
                 </div>
 
                 <div className="bg-white border border-[#cbc3d5]/35 rounded-[2rem] p-6 space-y-3">
-                  <p className="text-xs font-black text-[#7b7484] uppercase">Tu Mayor Fortalecimiento</p>
+                  <p className="text-xs font-black text-[#7b7484] uppercase">Rendimiento en Exámenes</p>
                   <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-green-500">verified</span>
-                    <h4 className="text-sm font-bold text-[#181c1e]">Gases y No Metales</h4>
+                    <span className={`material-symbols-outlined ${progress.quizzesPassed > 0 ? 'text-green-500' : 'text-[#7b7484]'}`}>verified</span>
+                    <h4 className="text-sm font-bold text-[#181c1e]">
+                      {progress.quizzesPassed > 0
+                        ? `${progress.quizzesPassed} ${progress.quizzesPassed === 1 ? 'examen aprobado' : 'exámenes aprobados'}`
+                        : 'Sin exámenes aprobados'}
+                    </h4>
                   </div>
                   <p className="text-xs text-[#494453] leading-relaxed">
-                    Has completado 4 exámenes de gases ideales y compuestos inertes con una calificación idónea superior al 94%.
+                    {progress.quizAttempts > 0
+                      ? `Has completado ${progress.quizzesPassed} de ${progress.quizAttempts} intentos con una calificación promedio de ${progress.averageQuizScore}%.`
+                      : 'Completa el cuestionario de certificación para registrar tu rendimiento real.'}
                   </p>
                 </div>
 
@@ -3141,7 +3331,7 @@ export default function App() {
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[680px] text-sm">
                     <thead>
                       <tr className="border-b border-[#f1f4f7] text-left text-[10px] font-bold text-[#7b7484] uppercase">
                         <th className="pb-2">Usuario</th>

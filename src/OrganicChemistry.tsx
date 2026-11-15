@@ -8,8 +8,8 @@ import {
   Lightbulb
 } from 'lucide-react';
 import { Chain, Exercise } from './organicTypes';
-import { 
-  EJERCICIOS, 
+import {
+  EJERCICIOS,
   generarCadenaAlcano,
   generarCadenaAlqueno,
   generarCadenaAlquino,
@@ -19,9 +19,17 @@ import {
   obtenerTipoCadena,
   TIPOS_CARBONO
 } from './organicData';
+import { ORGANIC_LESSON_PREFIX, organicLessonId } from './utils/progress';
+import {
+  clearLessonsByPrefix,
+  getCompletedLessons,
+  markLessonCompleted,
+} from './utils/progressStore';
 
 interface OrganicChemistryProps {
   onToast?: (message: string) => void;
+  /** Usuario activo; habilita el progreso persistente de los ejercicios. */
+  userId?: number;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -164,7 +172,7 @@ function ChainDiagram({ chain, compact = false }: ChainDiagramProps) {
   );
 }
 
-export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
+export default function OrganicChemistry({ onToast, userId }: OrganicChemistryProps) {
   const [activeTab, setActiveTab] = useState<'constructor' | 'ejercicios' | 'teoria'>('constructor');
   
   // Estado del Constructor
@@ -182,6 +190,23 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
   const [totalAttempts, setTotalAttempts] = useState<number>(0);
   const [showHint, setShowHint] = useState<boolean>(false);
   const [exercisesCompleted, setExercisesCompleted] = useState<Set<string>>(new Set());
+
+  // Hidrata el progreso persistido al entrar al módulo o cambiar de usuario.
+  // Así el perfil y el contador de ejercicios sobreviven a la navegación.
+  useEffect(() => {
+    if (!userId) return;
+
+    const validExerciseIds = new Set(EJERCICIOS.map((exercise) => exercise.id));
+    const completed = new Set(
+      [...getCompletedLessons(userId)]
+        .filter((lessonId) => lessonId.startsWith(ORGANIC_LESSON_PREFIX))
+        .map((lessonId) => lessonId.slice(ORGANIC_LESSON_PREFIX.length))
+        .filter((exerciseId) => validExerciseIds.has(exerciseId))
+    );
+
+    setExercisesCompleted(completed);
+    setScore(completed.size);
+  }, [userId]);
 
   // ============================================
   // FUNCIONES DEL CONSTRUCTOR
@@ -229,8 +254,14 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
     const isCorrect = userAnswer.toLowerCase().trim() === currentExercise.correctName.toLowerCase().trim();
     
     if (isCorrect) {
-      setScore(prev => prev + 1);
-      setExercisesCompleted(prev => new Set(prev).add(currentExercise.id));
+      // Solo suma una vez por ejercicio y persiste la lección para el perfil.
+      if (!exercisesCompleted.has(currentExercise.id)) {
+        setScore(prev => prev + 1);
+        setExercisesCompleted(prev => new Set(prev).add(currentExercise.id));
+        if (userId) {
+          markLessonCompleted(userId, organicLessonId(currentExercise.id));
+        }
+      }
       if (onToast) onToast('✅ ¡Correcto!');
     } else {
       if (onToast) onToast(`❌ Incorrecto. Respuesta correcta: ${currentExercise.correctName}`);
@@ -263,6 +294,9 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
     setScore(0);
     setTotalAttempts(0);
     setExercisesCompleted(new Set());
+    if (userId) {
+      clearLessonsByPrefix(userId, ORGANIC_LESSON_PREFIX);
+    }
     if (onToast) onToast('🔄 Ejercicios reiniciados');
   };
 
@@ -720,44 +754,50 @@ export default function OrganicChemistry({ onToast }: OrganicChemistryProps) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 bg-white/70 backdrop-blur border border-[#cbc3d5]/30 p-2 rounded-2xl">
+      <div className="grid grid-cols-3 gap-1 sm:gap-2 bg-white/70 backdrop-blur border border-[#cbc3d5]/30 p-1.5 sm:p-2 rounded-2xl">
         <button
           onClick={() => setActiveTab('constructor')}
-          className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+          className={`min-w-0 px-1.5 sm:px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
             activeTab === 'constructor'
               ? 'bg-[#461599] text-white shadow'
               : 'text-[#494453] hover:bg-[#f1f4f7]'
           }`}
         >
-          <span className="material-symbols-outlined text-sm">construction</span>
-          Constructor
+          <span className="hidden sm:inline-flex">
+            <span className="material-symbols-outlined text-sm">construction</span>
+          </span>
+          <span className="truncate">Constructor</span>
         </button>
         <button
           onClick={() => setActiveTab('ejercicios')}
-          className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+          className={`min-w-0 px-1.5 sm:px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
             activeTab === 'ejercicios'
               ? 'bg-[#461599] text-white shadow'
               : 'text-[#494453] hover:bg-[#f1f4f7]'
           }`}
         >
-          <span className="material-symbols-outlined text-sm">quiz</span>
-          Ejercicios
+          <span className="hidden sm:inline-flex">
+            <span className="material-symbols-outlined text-sm">quiz</span>
+          </span>
+          <span className="truncate">Ejercicios</span>
           {exercisesCompleted.size > 0 && (
-            <span className="bg-emerald-500 text-white text-[9px] px-2 py-0.5 rounded-full">
+            <span className="hidden sm:inline bg-emerald-500 text-white text-[9px] px-2 py-0.5 rounded-full">
               {exercisesCompleted.size}/{exercises.length}
             </span>
           )}
         </button>
         <button
           onClick={() => setActiveTab('teoria')}
-          className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+          className={`min-w-0 px-1.5 sm:px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
             activeTab === 'teoria'
               ? 'bg-[#461599] text-white shadow'
               : 'text-[#494453] hover:bg-[#f1f4f7]'
           }`}
         >
-          <span className="material-symbols-outlined text-sm">book</span>
-          Teoría
+          <span className="hidden sm:inline-flex">
+            <span className="material-symbols-outlined text-sm">book</span>
+          </span>
+          <span className="truncate">Teoría</span>
         </button>
       </div>
 

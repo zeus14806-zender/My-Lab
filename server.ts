@@ -14,6 +14,7 @@ import {
   type PermissionSubject,
   type RestrictedModuleKey,
 } from "./permissions.js";
+import { XP_PER_LEVEL } from "./src/utils/level.js";
 
 dotenv.config();
 
@@ -427,12 +428,17 @@ app.post("/api/quiz-results", async (req, res) => {
       [user_id, score, total_questions, passed ? 1 : 0, validation_code]
     );
     
-    // Actualizar XP del usuario
+    // Actualizar XP del usuario y recalcular su nivel con la misma fórmula
+    // que usa el cliente (src/utils/level.ts).
     if (passed) {
       const xpEarned = score * 50;
       await runQuery(
-        "UPDATE users SET xp_points = xp_points + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [xpEarned, user_id]
+        `UPDATE users
+            SET xp_points = xp_points + ?,
+                level = CAST((xp_points + ?) / ? AS INTEGER) + 1,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+        [xpEarned, xpEarned, XP_PER_LEVEL, user_id]
       );
     }
     
@@ -459,26 +465,47 @@ app.get("/api/quiz-results/:userId", async (req, res) => {
 app.get("/api/stats/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
-    
+
     const simCount = await getOneQuery<{ count: number }>(
       "SELECT COUNT(*) as count FROM simulations WHERE user_id = ?",
       [userId]
     );
-    
-    const quizPassed = await getOneQuery<{ count: number }>(
-      "SELECT COUNT(*) as count FROM quiz_results WHERE user_id = ? AND passed = 1",
+
+    // Agregado de cuestionarios: intentos totales, aprobados y aciertos.
+    // Se calcula en SQL para no depender del LIMIT de /api/quiz-results.
+    const quizAggregate = await getOneQuery<{
+      attempts: number;
+      passed: number;
+      correct: number;
+      questions: number;
+    }>(
+      `SELECT
+         COUNT(*) as attempts,
+         COALESCE(SUM(CASE WHEN passed = 1 THEN 1 ELSE 0 END), 0) as passed,
+         COALESCE(SUM(score), 0) as correct,
+         COALESCE(SUM(total_questions), 0) as questions
+       FROM quiz_results
+       WHERE user_id = ?`,
       [userId]
     );
-    
-    const avgScore = await getOneQuery<{ avg: number }>(
-      "SELECT AVG(score) as avg FROM quiz_results WHERE user_id = ?",
+
+    const userRow = await getOneQuery<{ xp_points: number; level: number }>(
+      "SELECT xp_points, level FROM users WHERE id = ?",
       [userId]
     );
-    
+
+    const attempts = quizAggregate?.attempts || 0;
+    const correct = quizAggregate?.correct || 0;
+    const questions = quizAggregate?.questions || 0;
+
     res.json({
+      xp_points: userRow?.xp_points || 0,
+      level: userRow?.level || 1,
       total_simulations: simCount?.count || 0,
-      quizzes_passed: quizPassed?.count || 0,
-      average_quiz_score: Math.round(avgScore?.avg || 0)
+      total_quiz_attempts: attempts,
+      quizzes_passed: quizAggregate?.passed || 0,
+      average_quiz_score: attempts > 0 ? Math.round(correct / attempts) : 0,
+      average_quiz_percent: questions > 0 ? Math.round((correct / questions) * 100) : 0,
     });
   } catch (error: any) {
     res.status(500).json({ error: "Error al obtener estadísticas", detail: error.message });
